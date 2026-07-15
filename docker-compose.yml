@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=sqlite:///./data/valuation.db
+      - REDIS_URL=redis://redis:6379
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    volumes:
+      - ./backend/data:/app/data
+    depends_on:
+      - redis
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+  redis:
+    image: redis:7.0
+    volumes:
+      - redis_data:/data
+
+  celery-worker:
+    build: ./backend
+    command: celery -A app.services.scheduler.celery_app worker --loglevel=info
+    environment:
+      - DATABASE_URL=sqlite:///./data/valuation.db
+      - REDIS_URL=redis://redis:6379
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    volumes:
+      - ./backend/data:/app/data
+    depends_on:
+      - redis
+      - backend
+
+  celery-beat:
+    build: ./backend
+    command: celery -A app.services.scheduler.celery_app beat --loglevel=info
+    environment:
+      - DATABASE_URL=sqlite:///./data/valuation.db
+      - REDIS_URL=redis://redis:6379
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    volumes:
+      - ./backend/data:/app/data
+    depends_on:
+      - redis
+      - backend
+
+volumes:
+  redis_data:

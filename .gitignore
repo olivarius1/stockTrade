@@ -23,6 +23,27 @@ pnpm-debug.log*
 # Valuation system - exclude large files
 *.zip
 *.ttf
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+
+# Database
+*.db
+backend/data/
+
+# Node
+node_modules/
+dist/
+
+# Env files
+.env
+.env.local
+.env.*.local
 估值系统设计/tbea-valuation/_shared/
 估值系统设计/stock-valuation-skill/_shared/
 估值系统设计/stock-valuation-skill/scripts/*.json
