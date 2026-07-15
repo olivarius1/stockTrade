@@ -8,7 +8,7 @@
     <h2>关于系统</h2>
     <el-descriptions :column="2" border>
       <el-descriptions-item label="系统名称">股票估值系统</el-descriptions-item>
-      <el-descriptions-item label="版本">1.0.0</el-descriptions-item>
+      <el-descriptions-item label="版本">1.4.0</el-descriptions-item>
       <el-descriptions-item label="后端框架">FastAPI 0.139+</el-descriptions-item>
       <el-descriptions-item label="前端框架">Vue3 3.4+</el-descriptions-item>
       <el-descriptions-item label="UI库">Element Plus 2.4+</el-descriptions-item>
