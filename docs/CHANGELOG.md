@@ -2,6 +2,47 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.0] - 2026-07-15
+
+### ✨ New Features
+
+- **估值报告页因子得分历史对比**
+  - 后端 `/api/valuation/history/{code}` 返回完整因子得分数据
+  - 前端支持选择历史日期与最新日期的因子得分对比
+  - 两种选日期方式：点击曲线数据点、手动输入（兼容多种日期格式）
+  - 单列双进度条对比：上方深色（最新）、下方浅色（历史），同色系区分
+  - 每个因子分配固定色系，不同因子色系不同，视觉上一眼区分
+  - 选中历史日期时图表上高亮标记（markPoint + 竖直辅助线）
+
+- **估值曲线图优化**
+  - 未参与计算的因子标识「未参与」（灰色标注，不渲染进度条）
+  - 价格曲线改为浅灰面积图，增强与估值分蓝色线的视觉区分
+  - 增加估值分百分位语义色虚线：80%（绿）、40%（橙）、20%（红）
+
+### 🔧 Improvements
+
+- **Docker 开发模式热重载**
+  - 新增 `docker-compose.override.yml` 挂载源代码 + uvicorn --reload
+- **缓存策略重构**
+  - 移除 K线/财务数据缓存，确保实时性和数据一致性
+  - MA/波动率计算结果缓存，用 `len(prices)` 作为数据版本标识
+- **代码注释规范**
+  - 后端补齐 Google-style docstrings，重点写 why
+  - 前端补齐 JSDoc 注释，重点写 why
+
+### 🐛 Bug Fixes
+
+- 修复估值历史 API 未返回因子得分字段的问题
+- 修复前端路由路径与 API 前缀不一致的问题
+
+### 🗑️ Cleanup
+
+- 删除 `估值系统设计/` 旧目录（脚本已迁移到 `backend/scripts/`，HTML 报告不再需要）
+- 删除 `backend/app/data/db_manager.py` 重复文件（已由 `kline_manager.py` 替代）
+- 清理 `.gitignore` 中已删除目录的规则
+
+---
+
 ## [1.3.0] - 2026-07-14
 
 ### 🏗️ Architecture Refactoring

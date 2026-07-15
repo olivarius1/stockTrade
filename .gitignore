@@ -50,15 +50,7 @@ dist/
 
 # Generated output
 backend/output/
-估值系统设计/tbea-valuation/_shared/
-估值系统设计/.uploads/
-估值系统设计/.trae-html-share-packages/
-估值系统设计/tbea-valuation/*.html
-估值系统设计/tbea-valuation/kline_*/
-估值系统设计/tbea-valuation/kline_*.json
-估值系统设计/tbea-valuation/assets/
-估值系统设计/backtest_report.html
-估值系统设计/stock_selection_result.json
+backtest_report.html
 
 # IDE config
 .idea/

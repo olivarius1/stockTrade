@@ -24,3 +24,14 @@ class ValuationHistoryItem(BaseModel):
     date: date
     score: float
     price: float
+    pe: Optional[float]
+    pb: Optional[float]
+    pe_score: Optional[float]
+    pb_score: Optional[float]
+    peg_score: Optional[float]
+    ma_score: Optional[float]
+    volatility_score: Optional[float]
+    volume_score: Optional[float]
+    roe_score: Optional[float]
+    dividend_score: Optional[float]
+    ai_score: Optional[float]

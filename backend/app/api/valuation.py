@@ -83,7 +83,7 @@ def get_valuation_history(
     end_date: date = Query(None),
     db: Session = Depends(get_db),
 ):
-    """获取股票估值评分历史，用于绘制估值趋势曲线。"""
+    """获取股票估值评分历史，包含各因子得分，用于绘制估值趋势曲线和联动对比。"""
     query = db.query(ValuationHistory).filter(ValuationHistory.stock_code == code)
     if start_date:
         query = query.filter(ValuationHistory.date >= start_date)
@@ -91,6 +91,21 @@ def get_valuation_history(
         query = query.filter(ValuationHistory.date <= end_date)
     history = query.order_by(ValuationHistory.date).all()
     return [
-        ValuationHistoryItem(date=h.date, score=h.score, price=h.price)
+        ValuationHistoryItem(
+            date=h.date,
+            score=h.score,
+            price=h.price,
+            pe=h.pe,
+            pb=h.pb,
+            pe_score=h.pe_score,
+            pb_score=h.pb_score,
+            peg_score=h.peg_score,
+            ma_score=h.ma_score,
+            volatility_score=h.volatility_score,
+            volume_score=h.volume_score,
+            roe_score=h.roe_score,
+            dividend_score=h.dividend_score,
+            ai_score=h.ai_score,
+        )
         for h in history
     ]
