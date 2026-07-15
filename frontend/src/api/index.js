@@ -1,3 +1,9 @@
+/**
+ * API 请求模块。
+ *
+ * 使用 axios 实例统一管理请求，自动附加 JWT token 和 401 跳转登录。
+ * baseURL 为 /api，开发环境通过 Vite proxy 转发到后端 8001 端口。
+ */
 import axios from 'axios'
 
 const api = axios.create({
@@ -32,21 +38,33 @@ export const authAPI = {
   }
 }
 
+/**
+ * 股票数据 API。
+ * 获取股票基本信息和搜索，估值相关调用见 valuationAPI。
+ */
 export const stockAPI = {
   search(keyword) {
     return api.get('/stock/search', { params: { keyword } })
   },
   getInfo(code) {
     return api.get(`/stock/${code}`)
-  },
-  getValuation(code, modelCode) {
-    return api.get(`/stock/${code}/valuation`, { params: { model_code: modelCode } })
-  },
-  getHistory(code, startDate, endDate) {
-    return api.get(`/stock/${code}/history`, { params: { start_date: startDate, end_date: endDate } })
   }
 }
 
+/**
+ * 估值 API。
+ * 为什么独立模块：估值是核心功能，独立 API 模块使调用方更清晰。
+ */
+export const valuationAPI = {
+  getReport(code, modelCode) {
+    return api.get(`/valuation/report/${code}`, { params: { model_code: modelCode } })
+  },
+  getHistory(code, startDate, endDate) {
+    return api.get(`/valuation/history/${code}`, { params: { start_date: startDate, end_date: endDate } })
+  }
+}
+
+/** 自选股管理 API */
 export const watchlistAPI = {
   getList() {
     return api.get('/watchlist')
@@ -62,6 +80,7 @@ export const watchlistAPI = {
   }
 }
 
+/** 定时任务管理 API */
 export const schedulerAPI = {
   getConfig() {
     return api.get('/scheduler/config')
@@ -74,6 +93,7 @@ export const schedulerAPI = {
   }
 }
 
+/** 估值模型和因子管理 API */
 export const modelsAPI = {
   getModels() {
     return api.get('/models')

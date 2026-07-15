@@ -1,3 +1,7 @@
+"""自选股管理服务，提供自选股的增删查和批量估值计算。
+
+批量计算在 Celery 定时任务和 API 中复用，确保逻辑一致。
+"""
 from typing import Dict, List
 from app.db.models import Watchlist, ValuationHistory
 from app.services.valuation import ValuationService
@@ -5,11 +9,14 @@ from app.services.data_service import DataService
 
 
 class WatchlistService:
+    """自选股服务，管理自选股列表并触发估值计算。"""
+
     def __init__(self):
         self.valuation_service = ValuationService()
         self.data_service = DataService()
 
     def get_watchlist(self, db) -> List[Dict]:
+        """查询全部自选股并返回其序列化信息列表。"""
         items = db.query(Watchlist).all()
         return [
             {
@@ -26,6 +33,22 @@ class WatchlistService:
         ]
 
     def add_stock(self, db, stock_code: str, stock_name: str, industry: str, model_type: str, ai_enabled: bool = False):
+        """添加一只股票到自选股列表，重复添加会被拒绝。
+
+        Args:
+            db: 数据库会话。
+            stock_code: 股票代码，唯一标识。
+            stock_name: 股票名称。
+            industry: 所属行业。
+            model_type: 适用的估值模型代码。
+            ai_enabled: 是否启用 AI 因子，默认 False。
+
+        Returns:
+            新增自选股的序列化字典。
+
+        Raises:
+            ValueError: 股票已存在于自选股列表时抛出。
+        """
         existing = db.query(Watchlist).filter(Watchlist.stock_code == stock_code).first()
         if existing:
             raise ValueError(f"Stock {stock_code} already exists in watchlist")
@@ -50,6 +73,18 @@ class WatchlistService:
         }
 
     def remove_stock(self, db, stock_code: str):
+        """从自选股列表移除指定股票。
+
+        Args:
+            db: 数据库会话。
+            stock_code: 待移除的股票代码。
+
+        Returns:
+            包含 stock_code 与 removed=True 的字典。
+
+        Raises:
+            ValueError: 股票不在自选股列表中时抛出。
+        """
         item = db.query(Watchlist).filter(Watchlist.stock_code == stock_code).first()
         if not item:
             raise ValueError(f"Stock {stock_code} not found in watchlist")
@@ -59,6 +94,18 @@ class WatchlistService:
         return {"stock_code": stock_code, "removed": True}
 
     def batch_calculate(self, db) -> List[Dict]:
+        """批量计算自选股列表中所有股票的估值评分。
+
+        为什么每次都写 DB：估值评分依赖历史趋势分析，DB 持久化支持
+        后续回测与百分位计算，缺失历史数据会导致 percentile 失真。
+
+        Args:
+            db: 数据库会话。
+
+        Returns:
+            每只股票的计算结果列表，元素包含 stock_code、stock_name、
+            score 与 status（success / no_data / error）。
+        """
         items = db.query(Watchlist).all()
         results: List[Dict] = []
 
@@ -85,9 +132,9 @@ class WatchlistService:
                 volume = stock_info.get("volume", 0)
 
                 closes = [h["close"] for h in historical if h.get("close") is not None]
-                ma20 = self.data_service.calculate_ma(closes, period=20)
-                ma60 = self.data_service.calculate_ma(closes, period=60)
-                volatility = self.data_service.calculate_volatility(closes)
+                ma20 = self.data_service.calculate_ma(stock_code, closes, period=20)
+                ma60 = self.data_service.calculate_ma(stock_code, closes, period=60)
+                volatility = self.data_service.calculate_volatility(stock_code, closes)
 
                 volumes = [h["volume"] for h in historical if h.get("volume") is not None]
                 if volumes:

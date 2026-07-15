@@ -1,3 +1,10 @@
+"""应用配置模块，通过环境变量和 .env 文件加载配置。
+
+关键配置项：
+- DATABASE_URL: SQLite 数据库路径
+- REDIS_URL: Redis 连接地址（缓存和 Celery 消息队列共用）
+- SECRET_KEY: JWT 签名密钥（生产环境必须修改）
+"""
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):

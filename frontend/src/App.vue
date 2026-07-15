@@ -1,14 +1,16 @@
 <template>
-  <div>
-    <h1>股票估值系统</h1>
-    <p>系统加载中...</p>
-  </div>
+  <router-view />
 </template>
 
 <script setup>
 </script>
 
 <style>
+html,
+#app {
+  min-height: 100%;
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -16,6 +18,7 @@
 }
 
 body {
+  min-height: 100vh;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
 }
 </style>

@@ -1,3 +1,4 @@
+"""自选股API，提供自选股管理和批量估值计算。"""
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -12,7 +13,7 @@ router = APIRouter()
 
 
 def _batch_calculate(db: Session) -> dict:
-    """Inline batch calculation logic for watchlist stocks."""
+    """批量计算自选股估值的内联实现（WatchlistService 不可用时的降级方案）。"""
     items = db.query(Watchlist).all()
     results = []
     data_service = DataService()
@@ -32,9 +33,9 @@ def _batch_calculate(db: Session) -> dict:
             current = kline_data[0]
             historical = kline_data[1:]
             prices = [h["close"] for h in historical if "close" in h]
-            ma20 = data_service.calculate_ma(prices, period=20)
-            ma60 = data_service.calculate_ma(prices, period=60)
-            volatility = data_service.calculate_volatility(prices)
+            ma20 = data_service.calculate_ma(item.stock_code, prices, period=20)
+            ma60 = data_service.calculate_ma(item.stock_code, prices, period=60)
+            volatility = data_service.calculate_volatility(item.stock_code, prices)
             financial = data_service.get_financial_data(item.stock_code, db=db)
 
             data = {
@@ -79,12 +80,14 @@ def _batch_calculate(db: Session) -> dict:
 
 @router.get("", response_model=List[WatchlistResponse])
 def get_watchlist(db: Session = Depends(get_db)):
+    """获取自选股列表。"""
     items = db.query(Watchlist).order_by(Watchlist.created_at.desc()).all()
     return items
 
 
 @router.post("", response_model=WatchlistResponse)
 def add_to_watchlist(item: WatchlistItem, db: Session = Depends(get_db)):
+    """添加股票到自选列表。"""
     existing = db.query(Watchlist).filter(Watchlist.stock_code == item.stock_code).first()
     if existing:
         raise HTTPException(status_code=400, detail="Stock already in watchlist")
@@ -103,6 +106,7 @@ def add_to_watchlist(item: WatchlistItem, db: Session = Depends(get_db)):
 
 @router.delete("/{code}")
 def remove_from_watchlist(code: str, db: Session = Depends(get_db)):
+    """从自选列表删除股票。"""
     item = db.query(Watchlist).filter(Watchlist.stock_code == code).first()
     if not item:
         raise HTTPException(status_code=404, detail="Stock not found in watchlist")
@@ -113,6 +117,7 @@ def remove_from_watchlist(code: str, db: Session = Depends(get_db)):
 
 @router.post("/batch")
 def batch_calculate(db: Session = Depends(get_db)):
+    """批量计算所有自选股的估值评分。"""
     try:
         from app.services.watchlist import WatchlistService
         service = WatchlistService()

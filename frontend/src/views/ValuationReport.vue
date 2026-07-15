@@ -57,11 +57,17 @@
 </template>
 
 <script setup>
+/**
+ * 估值报告页面。
+ *
+ * 为什么单独路由：估值报告是核心功能页面，独立路由便于书签和分享。
+ * 数据加载顺序：先获取股票基本信息，再获取估值结果，最后加载历史曲线。
+ */
 import { ref, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import * as echarts from 'echarts'
-import { stockAPI } from '../api'
+import { stockAPI, valuationAPI } from '../api'
 
 const router = useRouter()
 const route = useRoute()
@@ -108,7 +114,7 @@ const loadData = async () => {
   const code = route.params.code
   try {
     stockInfo.value = await stockAPI.getInfo(code)
-    valuation.value = await stockAPI.getValuation(code)
+    valuation.value = await valuationAPI.getReport(code)
 
     factorList.value = Object.entries(valuation.value.factors || {}).map(([code, score]) => ({
       name: factorNames[code] || code,
@@ -125,7 +131,7 @@ const loadData = async () => {
 
 const loadHistory = async () => {
   try {
-    const history = await stockAPI.getHistory(route.params.code)
+    const history = await valuationAPI.getHistory(route.params.code)
     await nextTick()
     renderChart(history)
   } catch (error) {

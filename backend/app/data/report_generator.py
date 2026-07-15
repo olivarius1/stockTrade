@@ -108,11 +108,12 @@ while i < len(sys.argv):
 
 KLINE_FILES = kline_args
 
-# 输出文件（基于脚本所在目录的相对路径）
+# 输出文件（基于后端目录的相对路径，输出到 backend/output/）
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_SKILL_DIR = os.path.dirname(_SCRIPT_DIR)  # stock-valuation-skill/
-_PROJECT_DIR = os.path.dirname(_SKILL_DIR)  # 估值系统设计/
-OUTPUT = os.path.join(_PROJECT_DIR, 'tbea-valuation', f'{STOCK_NAME}{STOCK_CODE}-valuation.html')
+_BACKEND_DIR = os.path.dirname(os.path.dirname(_SCRIPT_DIR))  # backend/
+_OUTPUT_DIR = os.path.join(_BACKEND_DIR, 'output', 'valuation-reports')
+os.makedirs(_OUTPUT_DIR, exist_ok=True)
+OUTPUT = os.path.join(_OUTPUT_DIR, f'{STOCK_NAME}{STOCK_CODE}-valuation.html')
 
 # 根据模型类型获取权重预设
 if MODEL_TYPE not in MODEL_PRESETS:
@@ -199,7 +200,13 @@ if KLINE_FILES:
     for kf in KLINE_FILES:
         with open(kf) as f:
             jd = json.load(f)
-        kdata = jd['data'][full_code]['qfqday']
+        stock_data = jd['data'][full_code]
+        if 'qfqday' in stock_data:
+            kdata = stock_data['qfqday']
+        elif 'day' in stock_data:
+            kdata = stock_data['day']
+        else:
+            raise KeyError(f"K线数据缺少 qfqday/day 字段，可用键: {list(stock_data.keys())}")
         qt = jd['data'][full_code]['qt'][full_code]
         for row in kdata:
             if row[0] not in seen_dates:
@@ -212,7 +219,7 @@ else:
     # DB模式：从SQLite增量更新并读取
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     try:
-        from db_manager import update_kline, get_kline, save_stock_info, get_stock_info as _get_info
+        from db_manager import update_kline, get_kline, save_stock_info, get_stock_info as _get_info, save_valuation_history
         print(f"  DB模式: 增量更新 {STOCK_NAME}({STOCK_CODE})...")
         # 先保存股票信息（确保stocks行存在，update_kline才能UPDATE last_pe/pb）
         save_stock_info(STOCK_CODE, STOCK_NAME, EXCHANGE, TOTAL_SHARES, INDUSTRY,
@@ -549,6 +556,14 @@ scores = [r['score'] for r in results]
 print(f"  评分: 均值{sum(scores)/len(scores):.1f} 最低{min(scores):.1f} 最高{max(scores):.1f} 最新{scores[-1]:.1f}")
 print(f"  区间: {kline[0]['date']} ~ {kline[-1]['date']}")
 
+# 保存估值评分到数据库
+if not KLINE_FILES:
+    try:
+        save_valuation_history(STOCK_CODE, results)
+        print(f"  估值历史已保存到数据库 ({len(results)}条)")
+    except Exception as e:
+        print(f"  估值历史保存失败: {e}")
+
 # 生成数据JS
 # 生成 markPoint 数据（标记盘中虚拟点）
 intraday_markpoint = []
@@ -571,7 +586,7 @@ val_data_js = 'var VALUATION_DATA = ' + json.dumps({
 }, ensure_ascii=False, separators=(',', ':')) + ';'
 
 # 读取ECharts
-echarts_path = os.path.join(_SKILL_DIR, '_shared', 'js', 'echarts.min.js')
+echarts_path = os.path.join(_BACKEND_DIR, 'assets', 'js', 'echarts.min.js')
 with open(echarts_path, 'r', encoding='utf-8') as f:
     echarts_js = f.read()
 

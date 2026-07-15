@@ -89,6 +89,12 @@
 </template>
 
 <script setup>
+/**
+ * 首页/自选股管理页面。
+ *
+ * 功能：搜索股票跳转报告、自选股增删、批量估值计算。
+ * 搜索是直接跳转到报告页（/valuation/report/:code），无需中间搜索结果页。
+ */
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
@@ -128,11 +134,11 @@ const searchStock = () => {
     ElMessage.warning('请输入股票代码')
     return
   }
-  router.push(`/stock/${searchKeyword.value}`)
+  router.push(`/valuation/report/${searchKeyword.value}`)
 }
 
 const viewReport = (code) => {
-  router.push(`/stock/${code}`)
+  router.push(`/valuation/report/${code}`)
 }
 
 const addStock = () => {

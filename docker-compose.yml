@@ -1,10 +1,8 @@
-version: '3.8'
-
 services:
   backend:
     build: ./backend
     ports:
-      - "8000:8000"
+      - "8001:8000"
     environment:
       - DATABASE_URL=sqlite:///./data/valuation.db
       - REDIS_URL=redis://redis:6379
@@ -12,20 +10,24 @@ services:
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
     volumes:
       - ./backend/data:/app/data
+      - ./backend/output:/app/output
     depends_on:
       - redis
+    restart: unless-stopped
 
   frontend:
     build: ./frontend
     ports:
-      - "80:80"
+      - "8080:80"
     depends_on:
       - backend
+    restart: unless-stopped
 
   redis:
-    image: redis:7.0
+    image: docker.m.daocloud.io/library/redis:7.0-alpine
     volumes:
       - redis_data:/data
+    restart: unless-stopped
 
   celery-worker:
     build: ./backend
@@ -37,9 +39,11 @@ services:
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
     volumes:
       - ./backend/data:/app/data
+      - ./backend/output:/app/output
     depends_on:
       - redis
       - backend
+    restart: unless-stopped
 
   celery-beat:
     build: ./backend
@@ -51,9 +55,11 @@ services:
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
     volumes:
       - ./backend/data:/app/data
+      - ./backend/output:/app/output
     depends_on:
       - redis
       - backend
+    restart: unless-stopped
 
 volumes:
   redis_data:

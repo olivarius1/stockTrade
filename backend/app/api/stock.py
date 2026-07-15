@@ -1,3 +1,4 @@
+"""股票数据API，提供股票搜索、基本信息查询和估值历史。"""
 from datetime import date
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -15,6 +16,7 @@ router = APIRouter()
 
 @router.get("/search", response_model=List[StockSearchResponse])
 def search_stocks(keyword: str = Query(..., description="搜索关键词")):
+    """搜索股票（当前为占位实现）。"""
     data_service = DataService()
     results = data_service.search_stock(keyword)
     return results
@@ -22,6 +24,7 @@ def search_stocks(keyword: str = Query(..., description="搜索关键词")):
 
 @router.get("/{code}", response_model=StockInfo)
 def get_stock_info(code: str, db: Session = Depends(get_db)):
+    """获取股票基本信息（名称、PE、PB、当前价格）。"""
     data_service = DataService()
     kline_data = data_service.get_kline_data(code, db=db)
     if not kline_data:
@@ -43,6 +46,7 @@ def get_valuation(
     model_code: str = Query("tech", description="估值模型代码"),
     db: Session = Depends(get_db),
 ):
+    """计算并返回股票估值报告（兼容旧接口，推荐使用 /api/valuation/report/{code}）。"""
     data_service = DataService()
     valuation_service = ValuationService()
 
@@ -54,9 +58,9 @@ def get_valuation(
     historical = kline_data[1:]
 
     prices = [item["close"] for item in historical if "close" in item]
-    ma20 = data_service.calculate_ma(prices, period=20)
-    ma60 = data_service.calculate_ma(prices, period=60)
-    volatility = data_service.calculate_volatility(prices)
+    ma20 = data_service.calculate_ma(code, prices, period=20)
+    ma60 = data_service.calculate_ma(code, prices, period=60)
+    volatility = data_service.calculate_volatility(code, prices)
 
     financial = data_service.get_financial_data(code, db=db)
 
@@ -102,6 +106,7 @@ def get_valuation_history(
     end_date: date = Query(None),
     db: Session = Depends(get_db),
 ):
+    """获取股票估值评分历史（兼容旧接口，推荐使用 /api/valuation/history/{code}）。"""
     query = db.query(ValuationHistory).filter(ValuationHistory.stock_code == code)
     if start_date:
         query = query.filter(ValuationHistory.date >= start_date)

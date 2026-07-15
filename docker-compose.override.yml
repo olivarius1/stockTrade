@@ -1,0 +1,20 @@
+# 开发环境覆盖配置，docker-compose up 自动合并此文件。
+# 生产部署用: docker-compose -f docker-compose.yml up -d
+services:
+  backend:
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/scripts:/app/scripts
+      - ./backend/entrypoint.sh:/app/entrypoint.sh
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    environment:
+      - DEBUG=true
+
+  celery-worker:
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/scripts:/app/scripts
+
+  celery-beat:
+    volumes:
+      - ./backend/app:/app/app

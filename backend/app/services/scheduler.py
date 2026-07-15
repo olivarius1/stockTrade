@@ -6,12 +6,17 @@ celery_app = Celery(
     "valuation",
     broker=settings.CELERY_BROKER_URL,
     backend=settings.CELERY_RESULT_BACKEND,
+    include=["app.tasks.valuation_tasks"],
 )
 
 celery_app.conf.beat_schedule = {
     'daily-valuation': {
         'task': 'app.tasks.valuation_tasks.calculate_watchlist',
         'schedule': crontab(hour=18, minute=0),
+    },
+    'daily-data-update': {
+        'task': 'app.tasks.valuation_tasks.update_kline_and_recalculate',
+        'schedule': crontab(hour=3, minute=0),
     },
 }
 

@@ -9,7 +9,10 @@ import os
 import sys
 import urllib.request
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'data', 'valuation.db')
+# 统一使用后端数据库
+_BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+_BACKEND_DB = os.path.join(_BACKEND_DIR, 'data', 'valuation.db')
+DB_PATH = os.environ.get('VALUATION_DB', _BACKEND_DB)
 
 def get_db_path():
     """获取数据库路径，支持通过环境变量覆盖"""
@@ -46,15 +49,37 @@ def ensure_db():
         updated_at TEXT DEFAULT CURRENT_TIMESTAMP
     )''')
     
-    c.execute('''CREATE TABLE IF NOT EXISTS kline_daily (
-        code TEXT NOT NULL,
+    c.execute('''CREATE TABLE IF NOT EXISTS kline_data (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        stock_code TEXT NOT NULL,
         date TEXT NOT NULL,
         open REAL,
-        close REAL,
         high REAL,
         low REAL,
+        close REAL,
         volume REAL,
-        PRIMARY KEY (code, date)
+        amount REAL,
+        UNIQUE(stock_code, date)
+    )''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS valuation_history (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        stock_code TEXT NOT NULL,
+        date TEXT NOT NULL,
+        score REAL,
+        pe_score REAL,
+        pb_score REAL,
+        peg_score REAL,
+        ma_score REAL,
+        volatility_score REAL,
+        volume_score REAL,
+        roe_score REAL,
+        dividend_score REAL,
+        ai_score REAL,
+        pe REAL,
+        pb REAL,
+        price REAL,
+        UNIQUE(stock_code, date)
     )''')
     
     c.execute('''CREATE TABLE IF NOT EXISTS reports_meta (
@@ -65,7 +90,8 @@ def ensure_db():
     )''')
     
     # 索引
-    c.execute('CREATE INDEX IF NOT EXISTS idx_kline_code ON kline_daily(code, date)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_kline_code ON kline_data(stock_code, date)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_valuation_code ON valuation_history(stock_code, date)')
     
     conn.commit()
     conn.close()
@@ -113,7 +139,7 @@ def update_kline(code, name=None, exchange=None):
     c = conn.cursor()
     
     # 查找最新日期
-    c.execute('SELECT MAX(date) FROM kline_daily WHERE code = ?', (code,))
+    c.execute('SELECT MAX(date) FROM kline_data WHERE stock_code = ?', (code,))
     row = c.fetchone()
     last_date = row[0] if row and row[0] else '2020-01-01'
     
@@ -168,18 +194,18 @@ def update_kline(code, name=None, exchange=None):
     # 写入数据库（INSERT OR REPLACE 处理重复）
     if all_rows:
         c.executemany(
-            'INSERT OR REPLACE INTO kline_daily (code, date, open, close, high, low, volume) VALUES (?, ?, ?, ?, ?, ?, ?)',
-            [(code, r['date'], r['open'], r['close'], r['high'], r['low'], r['volume']) for r in all_rows]
+            'INSERT OR REPLACE INTO kline_data (stock_code, date, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [(code, r['date'], r['open'], r['high'], r['low'], r['close'], r['volume']) for r in all_rows]
         )
         conn.commit()
     
     # 总天数
-    c.execute('SELECT COUNT(*) FROM kline_daily WHERE code = ?', (code,))
+    c.execute('SELECT COUNT(*) FROM kline_data WHERE stock_code = ?', (code,))
     total = c.fetchone()[0]
     
     # 如果没有获取到最新行情（增量0天），从数据库最新K线获取
     if not latest_info and total > 0:
-        c.execute('SELECT close FROM kline_daily WHERE code = ? ORDER BY date DESC LIMIT 1', (code,))
+        c.execute('SELECT close FROM kline_data WHERE stock_code = ? ORDER BY date DESC LIMIT 1', (code,))
         last_close = c.fetchone()
         latest_info = {'price': last_close[0] if last_close else 0, 'pe': 0, 'pb': 0}
     
@@ -203,7 +229,7 @@ def get_kline(code):
     conn = sqlite3.connect(get_db_path())
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
-    c.execute('SELECT date, open, close, high, low, volume FROM kline_daily WHERE code = ? ORDER BY date', (code,))
+    c.execute('SELECT date, open, close, high, low, volume FROM kline_data WHERE stock_code = ? ORDER BY date', (code,))
     rows = [dict(r) for r in c.fetchall()]
     conn.close()
     return rows
@@ -283,13 +309,65 @@ def db_stats():
     ensure_db()
     conn = sqlite3.connect(get_db_path())
     c = conn.cursor()
-    c.execute('SELECT COUNT(DISTINCT code) FROM kline_daily')
+    c.execute('SELECT COUNT(DISTINCT stock_code) FROM kline_data')
     stock_count = c.fetchone()[0]
-    c.execute('SELECT COUNT(*) FROM kline_daily')
+    c.execute('SELECT COUNT(*) FROM kline_data')
     total_rows = c.fetchone()[0]
+    c.execute('SELECT COUNT(*) FROM valuation_history')
+    val_rows = c.fetchone()[0]
     db_size = os.path.getsize(get_db_path()) / 1024
     conn.close()
-    return {'stocks': stock_count, 'kline_rows': total_rows, 'db_size_kb': round(db_size, 1)}
+    return {'stocks': stock_count, 'kline_rows': total_rows, 'valuation_rows': val_rows, 'db_size_kb': round(db_size, 1)}
+
+def save_valuation_history(stock_code, results):
+    """批量保存估值评分历史到数据库
+    results: list of dict, 每条含 date, close, score, pe_ttm, pb 等字段
+    """
+    ensure_db()
+    conn = sqlite3.connect(get_db_path())
+    c = conn.cursor()
+    for r in results:
+        c.execute('''INSERT OR REPLACE INTO valuation_history 
+            (stock_code, date, score, pe, pb, price, pe_score, pb_score, peg_score, 
+             ma_score, volatility_score, volume_score)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+            (stock_code, r['date'], r.get('score', 0),
+             r.get('pe_ttm', 0), r.get('pb', 0), r.get('close', 0),
+             r.get('s_pe', 0), r.get('s_pb', 0), r.get('s_peg', 0),
+             r.get('s_ma', 0), r.get('s_vola', 0), r.get('s_vol', 0)))
+    conn.commit()
+    conn.close()
+
+def get_valuation_history(stock_code):
+    """从数据库读取估值评分历史
+    返回: list of dict, 含 date, close, score, pe, pb 等
+    """
+    ensure_db()
+    conn = sqlite3.connect(get_db_path())
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute('''SELECT date, score, pe, pb, price FROM valuation_history 
+                 WHERE stock_code = ? ORDER BY date''', (stock_code,))
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
+
+def list_valuation_stocks():
+    """列出数据库中有估值历史的所有股票"""
+    ensure_db()
+    conn = sqlite3.connect(get_db_path())
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute('''SELECT DISTINCT vh.stock_code, s.name, s.industry, s.model_type,
+                 COUNT(vh.date) as days, MAX(vh.date) as latest_date,
+                 (SELECT score FROM valuation_history WHERE stock_code = vh.stock_code ORDER BY date DESC LIMIT 1) as latest_score
+                 FROM valuation_history vh
+                 LEFT JOIN stocks s ON vh.stock_code = s.code
+                 GROUP BY vh.stock_code
+                 ORDER BY vh.stock_code''')
+    rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return rows
 
 # ===== CLI 接口 =====
 if __name__ == '__main__':
