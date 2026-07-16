@@ -17,6 +17,10 @@
             <span class="value">{{ valuation.percentile }}%</span>
           </div>
           <div class="summary-item">
+            <span class="label">档位</span>
+            <span class="value" :class="getBandClass">{{ valuation.score_bands?.band_label || '--' }}</span>
+          </div>
+          <div class="summary-item">
             <span class="label">状态</span>
             <span class="value" :class="getStatusClass(valuation.status)">{{ valuation.status }}</span>
           </div>
@@ -32,6 +36,17 @@
             <span class="label">价格</span>
             <span class="value">¥{{ valuation.price }}</span>
           </div>
+        </div>
+
+        <!-- 分级参考线说明 -->
+        <div v-if="valuation.score_bands" class="bands-info">
+          <span class="bands-label">分级参考</span>
+          <span class="bands-range">极低 &lt;{{ valuation.score_bands.thresholds.p10 }}</span>
+          <span class="bands-range">偏低 {{ valuation.score_bands.thresholds.p10 }}-{{ valuation.score_bands.thresholds.p25 }}</span>
+          <span class="bands-range bands-neutral">中性 {{ valuation.score_bands.thresholds.p25 }}-{{ valuation.score_bands.thresholds.p75 }}</span>
+          <span class="bands-range">偏高 {{ valuation.score_bands.thresholds.p75 }}-{{ valuation.score_bands.thresholds.p90 }}</span>
+          <span class="bands-range">极高 ≥{{ valuation.score_bands.thresholds.p90 }}</span>
+          <span class="bands-source">({{ valuation.score_bands.source === 'stock' ? '个股' : '同模型' }} · {{ valuation.score_bands.sample_count }}天)</span>
         </div>
 
         <div class="chart-section">
@@ -67,7 +82,9 @@
             <span class="tip-arrow">→</span>
             <span class="tip-latest">最新({{ latestDate }})</span>
           </div>
-          <el-table :data="factorList" border>
+          <!-- :key 随 showCompare 变化，强制重建表格。
+               规避 Element Plus el-table-column 动态 v-if 导致行渲染不全的已知问题。 -->
+          <el-table :data="factorList" :key="showCompare ? 'with-compare' : 'single'" border>
             <el-table-column label="因子" width="160">
               <template #default="{ row }">
                 <span>{{ row.name }}</span>
@@ -343,22 +360,27 @@ const updateChartOption = (history, dates, scores, prices) => {
   } : undefined
 
   // 百分位参考线（语义色）+ 选中日期竖线，合并到同一 markLine。
-  // 百分位线始终显示，为估值分提供低估/中性/高估的视觉参照。
+  // 使用 score_bands 的 P90/P50/P10 作为低估/中性/高估分界线；
+  // 无 score_bands 时回退到固定值 80/40/20。
+  const bands = valuation.value?.score_bands?.thresholds
+  const p90 = bands?.p90 ?? 80
+  const p50 = bands?.p50 ?? 40
+  const p10 = bands?.p10 ?? 20
   const markLineData = [
     {
-      yAxis: 80,
+      yAxis: p90,
       lineStyle: { color: '#10b981', type: 'dashed', width: 1.5 },
-      label: { show: true, formatter: '80', position: 'end', color: '#10b981', fontSize: 11 }
+      label: { show: true, formatter: `P90:${p90}`, position: 'end', color: '#10b981', fontSize: 11 }
     },
     {
-      yAxis: 40,
+      yAxis: p50,
       lineStyle: { color: '#f59e0b', type: 'dashed', width: 1.5 },
-      label: { show: true, formatter: '40', position: 'end', color: '#f59e0b', fontSize: 11 }
+      label: { show: true, formatter: `P50:${p50}`, position: 'end', color: '#f59e0b', fontSize: 11 }
     },
     {
-      yAxis: 20,
+      yAxis: p10,
       lineStyle: { color: '#ef4444', type: 'dashed', width: 1.5 },
-      label: { show: true, formatter: '20', position: 'end', color: '#ef4444', fontSize: 11 }
+      label: { show: true, formatter: `P10:${p10}`, position: 'end', color: '#ef4444', fontSize: 11 }
     }
   ]
   // 选中日期竖线，仅对比时添加
@@ -527,6 +549,19 @@ const getStatusClass = (status) => {
   return classes[status] || ''
 }
 
+// 档位样式：基于分位数分级，颜色与档位含义对应
+const getBandClass = computed(() => {
+  const label = valuation.value?.score_bands?.band_label
+  const map = {
+    '极高(低估)': 'status-very-low',
+    '偏高': 'status-low',
+    '中性': 'status-neutral-low',
+    '偏低': 'status-neutral-high',
+    '极低(高估)': 'status-very-high'
+  }
+  return map[label] || ''
+})
+
 const getDeltaClass = (delta) => {
   if (delta > 0) return 'delta-up'
   if (delta < 0) return 'delta-down'
@@ -590,6 +625,35 @@ const goBack = () => {
 .status-neutral-high { color: #f59e0b; }
 .status-high { color: #ef4444; }
 .status-very-high { color: #dc2626; }
+/* 分级参考栏 */
+.bands-info {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 20px;
+  background: #fafafa;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #909399;
+  flex-wrap: wrap;
+}
+.bands-label {
+  font-weight: 600;
+  color: #606266;
+}
+.bands-range {
+  padding: 2px 8px;
+  border-radius: 3px;
+  background: #f0f0f0;
+}
+.bands-range.bands-neutral {
+  background: #e8f4fd;
+  color: #409eff;
+}
+.bands-source {
+  font-style: italic;
+  font-size: 11px;
+}
 .chart-section, .factors-section {
   margin-bottom: 20px;
   background: white;

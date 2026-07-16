@@ -3,6 +3,7 @@ from datetime import date
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+from sqlalchemy import func, select
 
 from app.db.session import get_db
 from app.db.models import ValuationHistory
@@ -106,13 +107,24 @@ def get_valuation_history(
     end_date: date = Query(None),
     db: Session = Depends(get_db),
 ):
-    """获取股票估值评分历史（兼容旧接口，推荐使用 /api/valuation/history/{code}）。"""
-    query = db.query(ValuationHistory).filter(ValuationHistory.stock_code == code)
+    """获取股票估值评分历史（兼容旧接口，推荐使用 /api/valuation/history/{code}）。
+
+    同一天取 id 最大的一条，避免多任务并发写入导致图表数据点重复。
+    """
+    subq = db.query(
+        func.max(ValuationHistory.id).label("max_id")
+    ).filter(
+        ValuationHistory.stock_code == code
+    )
     if start_date:
-        query = query.filter(ValuationHistory.date >= start_date)
+        subq = subq.filter(ValuationHistory.date >= start_date)
     if end_date:
-        query = query.filter(ValuationHistory.date <= end_date)
-    history = query.order_by(ValuationHistory.date).all()
+        subq = subq.filter(ValuationHistory.date <= end_date)
+    subq = subq.group_by(ValuationHistory.date).subquery()
+
+    history = db.query(ValuationHistory).filter(
+        ValuationHistory.id.in_(select(subq.c.max_id))
+    ).order_by(ValuationHistory.date).all()
     return [
         ValuationHistoryItem(date=h.date, score=h.score, price=h.price)
         for h in history

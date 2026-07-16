@@ -7,12 +7,13 @@ from datetime import date
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+from sqlalchemy import func, select
 
 from app.db.session import get_db
 from app.db.models import ValuationHistory
 from app.services.data_service import DataService
 from app.services.valuation import ValuationService
-from app.schemas.valuation import ValuationResult, ValuationHistoryItem
+from app.schemas.valuation import ValuationResult, ValuationHistoryItem, ScoreBands
 
 router = APIRouter()
 
@@ -62,6 +63,18 @@ def get_valuation_report(
     percentile = valuation_service.calculate_percentile(code, result["score"], db)
     status_text = valuation_service.get_status(percentile)
 
+    # 计算五档分级
+    bands_data = valuation_service.get_score_bands(code, model_code, db)
+    score_bands = None
+    if bands_data:
+        band_label = valuation_service.get_band_label(result["score"], bands_data)
+        score_bands = ScoreBands(
+            thresholds=bands_data["thresholds"],
+            source=bands_data["source"],
+            sample_count=bands_data["sample_count"],
+            band_label=band_label,
+        )
+
     return ValuationResult(
         stock_code=code,
         stock_name=current.get("name", ""),
@@ -73,6 +86,7 @@ def get_valuation_report(
         pb=current.get("pb", 0),
         price=current.get("price", 0),
         factors=result["factors"],
+        score_bands=score_bands,
     )
 
 
@@ -83,13 +97,25 @@ def get_valuation_history(
     end_date: date = Query(None),
     db: Session = Depends(get_db),
 ):
-    """获取股票估值评分历史，包含各因子得分，用于绘制估值趋势曲线和联动对比。"""
-    query = db.query(ValuationHistory).filter(ValuationHistory.stock_code == code)
+    """获取股票估值评分历史，包含各因子得分，用于绘制估值趋势曲线和联动对比。
+
+    同一天可能存在多条记录（多任务并发写入或手动重算），这里按日期取
+    id 最大的一条（最后写入的），确保图表上每天只有一个数据点。
+    """
+    subq = db.query(
+        func.max(ValuationHistory.id).label("max_id")
+    ).filter(
+        ValuationHistory.stock_code == code
+    )
     if start_date:
-        query = query.filter(ValuationHistory.date >= start_date)
+        subq = subq.filter(ValuationHistory.date >= start_date)
     if end_date:
-        query = query.filter(ValuationHistory.date <= end_date)
-    history = query.order_by(ValuationHistory.date).all()
+        subq = subq.filter(ValuationHistory.date <= end_date)
+    subq = subq.group_by(ValuationHistory.date).subquery()
+
+    history = db.query(ValuationHistory).filter(
+        ValuationHistory.id.in_(select(subq.c.max_id))
+    ).order_by(ValuationHistory.date).all()
     return [
         ValuationHistoryItem(
             date=h.date,

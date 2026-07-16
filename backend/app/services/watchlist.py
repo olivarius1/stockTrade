@@ -2,8 +2,8 @@
 
 批量计算在 Celery 定时任务和 API 中复用，确保逻辑一致。
 """
-from typing import Dict, List
-from app.db.models import Watchlist, ValuationHistory
+from typing import Dict, List, Optional
+from app.db.models import Watchlist, ValuationHistory, KlineData
 from app.services.valuation import ValuationService
 from app.services.data_service import DataService
 
@@ -93,6 +93,212 @@ class WatchlistService:
         db.commit()
         return {"stock_code": stock_code, "removed": True}
 
+    def save_valuation_history(self, db, stock_code: str, calc_date, score: float,
+                               factors: dict, pe: float, pb: float, price: float):
+        """保存或更新当日估值历史记录（upsert）。
+
+        同一股票同一天只保留一条记录，重复写入时更新最新值，避免多任务
+        并发或重复触发产生重复条目，导致百分位计算失真。
+
+        Args:
+            db: 数据库会话。
+            stock_code: 股票代码。
+            calc_date: 估值日期（date 对象）。
+            score: 总估值分。
+            factors: 各因子得分数典。
+            pe: 市盈率。
+            pb: 市净率。
+            price: 最新价格。
+        """
+        existing = db.query(ValuationHistory).filter(
+            ValuationHistory.stock_code == stock_code,
+            ValuationHistory.date == calc_date
+        ).first()
+
+        if existing:
+            existing.score = score
+            existing.pe_score = factors.get("pe")
+            existing.pb_score = factors.get("pb")
+            existing.peg_score = factors.get("peg")
+            existing.ma_score = factors.get("ma_deviation")
+            existing.volatility_score = factors.get("volatility")
+            existing.volume_score = factors.get("volume")
+            existing.roe_score = factors.get("roe")
+            existing.dividend_score = factors.get("dividend")
+            existing.ai_score = factors.get("ai_analysis")
+            existing.pe = pe
+            existing.pb = pb
+            existing.price = price
+        else:
+            history = ValuationHistory(
+                stock_code=stock_code,
+                date=calc_date,
+                score=score,
+                pe_score=factors.get("pe"),
+                pb_score=factors.get("pb"),
+                peg_score=factors.get("peg"),
+                ma_score=factors.get("ma_deviation"),
+                volatility_score=factors.get("volatility"),
+                volume_score=factors.get("volume"),
+                roe_score=factors.get("roe"),
+                dividend_score=factors.get("dividend"),
+                ai_score=factors.get("ai_analysis"),
+                pe=pe,
+                pb=pb,
+                price=price,
+            )
+            db.add(history)
+
+        db.commit()
+
+    def backfill_valuation_history(self, db, stock_code: str, model_type: str,
+                                   ai_enabled: bool = False) -> Optional[Dict]:
+        """用现有K线历史批量回溯估值并保存到数据库。
+
+        新加入自选股的股票往往有大量K线历史但无估值历史，导致百分位和分级
+        无法基于个股自身分布计算。本方法遍历全部历史K线，逐日推算指标并
+        计算估值分，一次性补齐历史。
+
+        回溯逻辑：
+        1. 从数据库读取完整K线历史（close, volume）
+        2. 获取最新财务数据（eps, roe）
+        3. 对每一天：
+           - price = close
+           - pe = close / eps（用最新eps估算历史PE，近似）
+           - pb = pe * roe（利用 PB = PE × ROE 关系推算，近似）
+           - ma20/ma60/volatility/volume_ratio 从历史序列计算
+        4. 调用估值模型计算得分
+        5. 批量保存到 valuation_history
+
+        注意：由于使用最新EPS/ROE估算历史PE/PB，回溯结果有一定近似性；
+        后续定时任务会用当日实时PE/PB逐步更新改善。
+
+        Args:
+            db: 数据库会话。
+            stock_code: 股票代码。
+            model_type: 估值模型代码。
+            ai_enabled: 是否启用AI因子。
+
+        Returns:
+            包含 backfilled(条数)、from_date、to_date 的字典；
+            K线不足60天无法计算MA/波动率时返回 None。
+        """
+        # 1. 读取完整K线历史
+        kline_rows = db.query(KlineData).filter(
+            KlineData.stock_code == stock_code
+        ).order_by(KlineData.date).all()
+
+        if len(kline_rows) < 60:
+            return None
+
+        # 2. 最新财务数据
+        financial = self.data_service.get_financial_data(stock_code, db=db)
+        eps = financial.get("eps", 0) or 1e-6  # 避免除零
+        roe = financial.get("roe", 0) or 0
+
+        closes = [r.close for r in kline_rows]
+        volumes = [r.volume for r in kline_rows]
+
+        backfilled = 0
+        from_date = kline_rows[0].date
+        to_date = kline_rows[-1].date
+
+        # 3. 逐日回溯
+        for i, row in enumerate(kline_rows):
+            price = row.close
+
+            # PE/PB 用最新财务数据推算（近似）
+            pe = price / eps if eps > 0 else 0
+            pb = pe * roe if roe > 0 else 0
+
+            # 技术指标从历史序列计算
+            hist_closes = closes[:i + 1]
+            hist_volumes = volumes[:i + 1]
+
+            ma20 = self.data_service.calculate_ma(stock_code, hist_closes, period=20)
+            ma60 = self.data_service.calculate_ma(stock_code, hist_closes, period=60)
+            volatility = self.data_service.calculate_volatility(stock_code, hist_closes)
+
+            avg_volume = sum(hist_volumes[-60:]) / min(len(hist_volumes), 60) if hist_volumes else 1
+            volume_ratio = row.volume / avg_volume if avg_volume else 1
+
+            data = {
+                "price": price,
+                "pe": pe,
+                "pb": pb,
+                "volume": row.volume,
+                "amount": 0,
+                "ma20": ma20,
+                "ma60": ma60,
+                "volatility": volatility,
+                "volume_ratio": volume_ratio,
+                "eps": financial.get("eps", 0),
+                "revenue": financial.get("revenue", 0),
+                "net_profit": financial.get("net_profit", 0),
+                "roe": financial.get("roe", 0),
+                "gross_margin": financial.get("gross_margin", 0),
+                "dividend_rate": financial.get("dividend_rate", 0),
+            }
+
+            try:
+                result = self.valuation_service.calculate(
+                    stock_code, model_type, data, ai_enabled=ai_enabled
+                )
+                factors = result.get("factors", {})
+                score = result.get("score", 0)
+
+                # 使用内部upsert但不commit，最后统一commit
+                existing = db.query(ValuationHistory).filter(
+                    ValuationHistory.stock_code == stock_code,
+                    ValuationHistory.date == row.date
+                ).first()
+
+                if existing:
+                    existing.score = score
+                    existing.pe_score = factors.get("pe")
+                    existing.pb_score = factors.get("pb")
+                    existing.peg_score = factors.get("peg")
+                    existing.ma_score = factors.get("ma_deviation")
+                    existing.volatility_score = factors.get("volatility")
+                    existing.volume_score = factors.get("volume")
+                    existing.roe_score = factors.get("roe")
+                    existing.dividend_score = factors.get("dividend")
+                    existing.ai_score = factors.get("ai_analysis")
+                    existing.pe = pe
+                    existing.pb = pb
+                    existing.price = price
+                else:
+                    history = ValuationHistory(
+                        stock_code=stock_code,
+                        date=row.date,
+                        score=score,
+                        pe_score=factors.get("pe"),
+                        pb_score=factors.get("pb"),
+                        peg_score=factors.get("peg"),
+                        ma_score=factors.get("ma_deviation"),
+                        volatility_score=factors.get("volatility"),
+                        volume_score=factors.get("volume"),
+                        roe_score=factors.get("roe"),
+                        dividend_score=factors.get("dividend"),
+                        ai_score=factors.get("ai_analysis"),
+                        pe=pe,
+                        pb=pb,
+                        price=price,
+                    )
+                    db.add(history)
+
+                backfilled += 1
+            except Exception:
+                # 单日计算失败不影响其他天
+                continue
+
+        db.commit()
+        return {
+            "backfilled": backfilled,
+            "from_date": str(from_date),
+            "to_date": str(to_date),
+        }
+
     def batch_calculate(self, db) -> List[Dict]:
         """批量计算自选股列表中所有股票的估值评分。
 
@@ -171,25 +377,7 @@ class WatchlistService:
                 score = result.get("score", 0)
                 today = self.data_service.get_current_date()
 
-                history = ValuationHistory(
-                    stock_code=stock_code,
-                    date=today,
-                    score=score,
-                    pe_score=factors.get("pe"),
-                    pb_score=factors.get("pb"),
-                    peg_score=factors.get("peg"),
-                    ma_score=factors.get("ma_deviation"),
-                    volatility_score=factors.get("volatility"),
-                    volume_score=factors.get("volume"),
-                    roe_score=factors.get("roe"),
-                    dividend_score=factors.get("dividend"),
-                    ai_score=factors.get("ai_analysis"),
-                    pe=pe,
-                    pb=pb,
-                    price=price,
-                )
-                db.add(history)
-                db.commit()
+                self.save_valuation_history(db, stock_code, today, score, factors, pe, pb, price)
 
                 results.append({
                     "stock_code": stock_code,

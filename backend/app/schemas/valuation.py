@@ -1,6 +1,13 @@
 from pydantic import BaseModel
 from datetime import date
-from typing import Optional, Dict
+from typing import Optional, Dict, List
+
+class ScoreBands(BaseModel):
+    """估值分五档分级阈值，基于个股或同模型历史分布计算。"""
+    thresholds: Dict[str, float]  # {"p10": x, "p25": x, "p50": x, "p75": x, "p90": x}
+    source: str       # "stock" = 个股数据, "model" = 同模型合并
+    sample_count: int  # 样本量
+    band_label: str    # 当前分数所处档位，如 "中性"、"极高(低估)"
 
 class ValuationFactor(BaseModel):
     code: str
@@ -19,6 +26,7 @@ class ValuationResult(BaseModel):
     pb: float
     price: float
     factors: Dict[str, float]
+    score_bands: Optional[ScoreBands] = None
 
 class ValuationHistoryItem(BaseModel):
     date: date

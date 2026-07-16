@@ -79,6 +79,11 @@ class ValuationService:
         百分位越高表示当前估值越低（更便宜）；无历史数据时返回 50.0
         作为中性默认值，避免新上市股票因缺乏历史而判定异常。
 
+        算法说明：
+        1. 按日期去重，同一天只取一条记录，避免重复写入导致百分位失真
+        2. 使用"低于当前分的数量 + 同分的一半"作为排名，这是统计学标准做法，
+           当存在大量同分数据时不会偏向一侧
+
         Args:
             stock_code: 股票代码，用于查询历史评分。
             score: 当前估值评分。
@@ -87,19 +92,35 @@ class ValuationService:
         Returns:
             0~100 之间的百分位数值，保留两位小数。
         """
-        history = db.query(ValuationHistory).filter(
+        from sqlalchemy import func, select
+
+        # 按日期分组取最大 id 对应的分数，确保每日只有一条记录
+        # 先用子查询找到每天最新记录的 id
+        subq = db.query(
+            func.max(ValuationHistory.id).label("max_id")
+        ).filter(
             ValuationHistory.stock_code == stock_code
+        ).group_by(
+            ValuationHistory.date
+        ).subquery()
+
+        history = db.query(ValuationHistory).filter(
+            ValuationHistory.id.in_(select(subq.c.max_id))
         ).all()
-        
+
         if not history:
             return 50.0
-        
-        scores = [h.score for h in history]
+
+        scores = [h.score for h in history if h.score is not None]
+        if not scores:
+            return 50.0
+
         scores.append(score)
-        scores.sort()
-        
-        rank = scores.index(score)
-        percentile = (rank / len(scores)) * 100
+        n = len(scores)
+        below = sum(1 for s in scores if s < score)
+        equal = sum(1 for s in scores if s == score)
+        rank = below + equal / 2
+        percentile = (rank / n) * 100
         return round(percentile, 2)
     
     def get_status(self, percentile: float) -> str:
@@ -127,6 +148,116 @@ class ValuationService:
         else:
             return "极度高估"
     
+    def get_score_bands(self, stock_code: str, model_code: str, db) -> Optional[Dict]:
+        """计算估值分五档分级阈值（个股优先，同模型兜底）。
+
+        分级方式：按历史分数的 P10/P25/P75/P90 划分五档，每档含义：
+          极低(高估)  score < P10
+          偏低        P10 ≤ score < P25
+          中性        P25 ≤ score < P75
+          偏高        P75 ≤ score < P90
+          极高(低估)  score ≥ P90
+
+        数据来源：
+          1. 个股历史 ≥ 750天（约3年）→ 用个股自身分布
+          2. 个股不足 750 天 → 合并同模型所有股票的分数计算
+          3. 无任何历史 → 返回 None
+
+        Args:
+            stock_code: 股票代码。
+            model_code: 估值模型代码，用于同模型兜底。
+            db: 数据库会话。
+
+        Returns:
+            包含 thresholds(P10/P25/P50/P75/P90)、source("stock"/"model")、
+            sample_count 的字典；无数据时返回 None。
+        """
+        from sqlalchemy import func, select
+        from app.db.models import Watchlist
+
+        MIN_SAMPLE = 750  # 约3年交易日
+
+        # 按日期去重取分数的辅助函数
+        def get_scores(stock_codes):
+            """查询指定股票代码列表的估值分数（按日期去重）。"""
+            subq = db.query(
+                func.max(ValuationHistory.id).label("max_id")
+            ).filter(
+                ValuationHistory.stock_code.in_(stock_codes)
+            ).group_by(
+                ValuationHistory.date,
+                ValuationHistory.stock_code
+            ).subquery()
+
+            records = db.query(ValuationHistory.score).filter(
+                ValuationHistory.id.in_(select(subq.c.max_id)),
+                ValuationHistory.score.isnot(None)
+            ).all()
+            return sorted([r[0] for r in records])
+
+        # 先尝试个股数据
+        scores = get_scores([stock_code])
+        source = "stock"
+
+        if len(scores) < MIN_SAMPLE:
+            # 不足3年，用同模型所有股票合并
+            model_stocks = db.query(Watchlist.stock_code).filter(
+                Watchlist.model_type == model_code
+            ).all()
+            model_codes = [s[0] for s in model_stocks if s[0] != stock_code]
+
+            if model_codes:
+                all_scores = get_scores(model_codes)
+                # 合并个股自身的分数
+                all_scores = sorted(scores + all_scores)
+                scores = all_scores
+                source = "model"
+
+            if len(scores) < MIN_SAMPLE:
+                return None
+
+        # 计算分位数
+        def quantile(data, p):
+            idx = p * (len(data) - 1)
+            lo = int(idx)
+            hi = min(lo + 1, len(data) - 1)
+            frac = idx - lo
+            return round(data[lo] * (1 - frac) + data[hi] * frac, 1)
+
+        return {
+            "thresholds": {
+                "p10": quantile(scores, 0.10),
+                "p25": quantile(scores, 0.25),
+                "p50": quantile(scores, 0.50),
+                "p75": quantile(scores, 0.75),
+                "p90": quantile(scores, 0.90),
+            },
+            "source": source,
+            "sample_count": len(scores),
+        }
+
+    def get_band_label(self, score: float, bands: Dict) -> str:
+        """根据分级阈值返回当前分数所处的档位标签。
+
+        Args:
+            score: 当前估值分。
+            bands: get_score_bands() 返回的字典。
+
+        Returns:
+            档位标签，如 "极高(低估)"、"中性"、"极低(高估)" 等。
+        """
+        t = bands["thresholds"]
+        if score >= t["p90"]:
+            return "极高(低估)"
+        elif score >= t["p75"]:
+            return "偏高"
+        elif score >= t["p25"]:
+            return "中性"
+        elif score >= t["p10"]:
+            return "偏低"
+        else:
+            return "极低(高估)"
+
     def get_models(self) -> List[Dict]:
         """返回所有已注册的估值模型元信息列表。"""
         return list_models()

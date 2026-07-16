@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, Boolean, Date, DateTime, JSON
+from sqlalchemy import Column, Integer, String, Float, Boolean, Date, DateTime, JSON, UniqueConstraint
 from sqlalchemy.sql import func
 from app.db.session import Base
 
@@ -17,8 +17,15 @@ class KlineData(Base):
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
 
 class ValuationHistory(Base):
-    """估值历史表，每日估值评分记录。用于趋势分析和百分位计算。"""
+    """估值历史表，每日估值评分记录。用于趋势分析和百分位计算。
+
+    数据库层面通过 (stock_code, date) 唯一约束保证每日每只股票只有一条记录，
+    从源头杜绝多任务并发写入或重复触发产生的重复数据。
+    """
     __tablename__ = "valuation_history"
+    __table_args__ = (
+        UniqueConstraint("stock_code", "date", name="uq_valuation_history_stock_date"),
+    )
     id = Column(Integer, primary_key=True, index=True)
     stock_code = Column(String(10), index=True)
     date = Column(Date, index=True)

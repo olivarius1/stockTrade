@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api import auth_router, stock_router, valuation_router, watchlist_router, scheduler_router, models_router
 
-app = FastAPI(title="Stock Valuation System", version="1.4.0")
+app = FastAPI(title="Stock Valuation System", version="1.5.0")
 
 app.add_middleware(
     CORSMiddleware,

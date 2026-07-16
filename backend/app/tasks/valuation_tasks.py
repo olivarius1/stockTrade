@@ -4,6 +4,7 @@ from app.db.session import SessionLocal
 from app.db.models import Watchlist, KlineData, ValuationHistory
 from app.data.kline_manager import update_kline
 from app.core.cache import cache_clear_pattern
+from datetime import date
 
 
 @celery_app.task
@@ -82,29 +83,10 @@ def update_kline_and_recalculate():
                         
                         factors = result.get("factors", {})
                         score = result.get("score", 0)
-                        
-                        from app.db.models import ValuationHistory
-                        from datetime import date
-                        
-                        history = ValuationHistory(
-                            stock_code=stock_code,
-                            date=date.today(),
-                            score=score,
-                            pe_score=factors.get("pe"),
-                            pb_score=factors.get("pb"),
-                            peg_score=factors.get("peg"),
-                            ma_score=factors.get("ma_deviation"),
-                            volatility_score=factors.get("volatility"),
-                            volume_score=factors.get("volume"),
-                            roe_score=factors.get("roe"),
-                            dividend_score=factors.get("dividend"),
-                            ai_score=factors.get("ai_analysis"),
-                            pe=pe,
-                            pb=pb,
-                            price=price,
+
+                        service.save_valuation_history(
+                            db, stock_code, date.today(), score, factors, pe, pb, price
                         )
-                        db.add(history)
-                        db.commit()
                         
                         results.append({
                             "stock_code": stock_code,
