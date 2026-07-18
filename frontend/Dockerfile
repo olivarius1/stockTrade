@@ -1,12 +1,12 @@
-ARG NODE_BASE_IMAGE=docker.m.daocloud.io/library/node:20-alpine
-ARG NGINX_BASE_IMAGE=docker.m.daocloud.io/library/nginx:alpine
+ARG NODE_BASE_IMAGE=m.daocloud.io/docker.io/library/node:20-alpine
+ARG NGINX_BASE_IMAGE=m.daocloud.io/docker.io/library/nginx:alpine
 FROM ${NODE_BASE_IMAGE} AS build
 
 WORKDIR /app
 
 COPY package*.json ./
 
-RUN npm install
+RUN npm config set registry https://registry.npmmirror.com && npm install
 
 COPY . .
 

@@ -1,16 +1,12 @@
 #!/usr/bin/env python3
 """
-包装脚本：调用工程目录中的实际 report_generator.py
-Skill 复用工程代码，不重复实现逻辑
+报告生成入口：直接调用skill目录中的 report_generator.py
+支持命令行参数、财务报表自动获取、10年K线回测
 """
 import os, sys
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-_SKILL_DIR = os.path.dirname(_SCRIPT_DIR)
-_TRAE_DIR = os.path.dirname(_SKILL_DIR)
-_PROJECT_ROOT = os.path.dirname(_TRAE_DIR)
-
-_REAL_SCRIPT = os.path.join(_PROJECT_ROOT, 'backend', 'app', 'data', 'report_generator.py')
+_REAL_SCRIPT = os.path.join(_SCRIPT_DIR, 'report_generator.py')
 
 if __name__ == '__main__':
     sys.argv[0] = _REAL_SCRIPT

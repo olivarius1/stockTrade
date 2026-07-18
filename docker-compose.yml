@@ -24,7 +24,7 @@ services:
     restart: unless-stopped
 
   redis:
-    image: docker.m.daocloud.io/library/redis:7.0-alpine
+    image: m.daocloud.io/docker.io/library/redis:7.0-alpine
     volumes:
       - redis_data:/data
     restart: unless-stopped

@@ -7,3 +7,4 @@ from .volume import VolumeFactor
 from .roe import ROEFactor
 from .dividend import DividendFactor
 from .ai_analysis import AIAnalysisFactor
+from .revenue_growth_5y import RevenueGrowth5YFactor

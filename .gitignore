@@ -32,10 +32,6 @@ __pycache__/
 .venv/
 venv/
 
-# Database
-*.db
-backend/data/
-
 # Node
 node_modules/
 dist/
@@ -51,6 +47,7 @@ dist/
 # Generated output
 backend/output/
 backtest_report.html
+local_reports/
 
 # IDE config
 .idea/
