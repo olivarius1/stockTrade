@@ -1,91 +1,86 @@
 #!/usr/bin/env python3
 """
 A股估值数据库管理模块
-SQLite存储K线数据，支持增量更新
+PostgreSQL存储K线数据，支持增量更新
 """
-import sqlite3
+import psycopg2
+import psycopg2.extras
 import json
 import os
 import sys
 import urllib.request
 
-# 统一使用后端数据库
-_BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_BACKEND_DB = os.path.join(_BACKEND_DIR, 'data', 'valuation.db')
-DB_PATH = os.environ.get('VALUATION_DB', _BACKEND_DB)
-
-def get_db_path():
-    """获取数据库路径，支持通过环境变量覆盖"""
-    return os.environ.get('VALUATION_DB', DB_PATH)
+def get_connection():
+    """从 DATABASE_URL 环境变量获取 PostgreSQL 连接"""
+    db_url = os.environ.get('DATABASE_URL', 'postgresql://postgres:postgres@localhost:5432/valuation')
+    return psycopg2.connect(db_url)
 
 def ensure_db():
-    """确保数据库和表存在"""
-    db_path = get_db_path()
-    os.makedirs(os.path.dirname(db_path), exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    """确保数据库表存在"""
+    conn = get_connection()
     c = conn.cursor()
     
     c.execute('''CREATE TABLE IF NOT EXISTS stocks (
         code TEXT PRIMARY KEY,
         name TEXT NOT NULL,
         exchange TEXT NOT NULL,
-        total_shares REAL,
+        total_shares DOUBLE PRECISION,
         industry TEXT,
         model_type TEXT DEFAULT 'cyclical',
-        pe_min REAL DEFAULT 6,
-        pe_max REAL DEFAULT 20,
-        pb_min REAL DEFAULT 1.0,
-        pb_max REAL DEFAULT 4.0,
-        eps_growth REAL DEFAULT 0.10,
+        pe_min DOUBLE PRECISION DEFAULT 6,
+        pe_max DOUBLE PRECISION DEFAULT 20,
+        pb_min DOUBLE PRECISION DEFAULT 1.0,
+        pb_max DOUBLE PRECISION DEFAULT 4.0,
+        eps_growth DOUBLE PRECISION DEFAULT 0.10,
         revenue TEXT,
         net_profit TEXT,
         gross_margin TEXT,
         market_cap TEXT,
         subtitle TEXT,
         extra_factors TEXT DEFAULT '{}',
-        last_pe REAL DEFAULT 0,
-        last_pb REAL DEFAULT 0,
-        last_price REAL DEFAULT 0,
-        updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        last_pe DOUBLE PRECISION DEFAULT 0,
+        last_pb DOUBLE PRECISION DEFAULT 0,
+        last_price DOUBLE PRECISION DEFAULT 0,
+        updated_at TIMESTAMP DEFAULT NOW()
     )''')
     
     c.execute('''CREATE TABLE IF NOT EXISTS kline_data (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         stock_code TEXT NOT NULL,
         date TEXT NOT NULL,
-        open REAL,
-        high REAL,
-        low REAL,
-        close REAL,
-        volume REAL,
-        amount REAL,
+        open DOUBLE PRECISION,
+        high DOUBLE PRECISION,
+        low DOUBLE PRECISION,
+        close DOUBLE PRECISION,
+        volume DOUBLE PRECISION,
+        amount DOUBLE PRECISION,
         UNIQUE(stock_code, date)
     )''')
     
     c.execute('''CREATE TABLE IF NOT EXISTS valuation_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        id SERIAL PRIMARY KEY,
         stock_code TEXT NOT NULL,
         date TEXT NOT NULL,
-        score REAL,
-        pe_score REAL,
-        pb_score REAL,
-        peg_score REAL,
-        ma_score REAL,
-        volatility_score REAL,
-        volume_score REAL,
-        roe_score REAL,
-        dividend_score REAL,
-        ai_score REAL,
-        pe REAL,
-        pb REAL,
-        price REAL,
+        score DOUBLE PRECISION,
+        pe_score DOUBLE PRECISION,
+        pb_score DOUBLE PRECISION,
+        peg_score DOUBLE PRECISION,
+        ma_score DOUBLE PRECISION,
+        volatility_score DOUBLE PRECISION,
+        volume_score DOUBLE PRECISION,
+        roe_score DOUBLE PRECISION,
+        dividend_score DOUBLE PRECISION,
+        ai_score DOUBLE PRECISION,
+        pe DOUBLE PRECISION,
+        pb DOUBLE PRECISION,
+        price DOUBLE PRECISION,
         UNIQUE(stock_code, date)
     )''')
     
     c.execute('''CREATE TABLE IF NOT EXISTS reports_meta (
         code TEXT PRIMARY KEY,
         report_file TEXT,
-        generated_at TEXT,
+        generated_at TIMESTAMP,
         params TEXT
     )''')
     
@@ -95,7 +90,6 @@ def ensure_db():
     
     conn.commit()
     conn.close()
-    return db_path
 
 def fetch_kline_from_api(code_full, start_date, end_date):
     """从腾讯API获取K线数据
@@ -107,7 +101,6 @@ def fetch_kline_from_api(code_full, start_date, end_date):
     req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
     with urllib.request.urlopen(req, timeout=15) as resp:
         data = json.loads(resp.read().decode('utf-8'))
-    # 安全获取K线数据（某些股票上市前可能无qfqday字段）
     stock_data = data.get('data', {}).get(code_full, {})
     kdata = stock_data.get('qfqday', [])
     qt = stock_data.get('qt', {}).get(code_full, [])
@@ -135,15 +128,13 @@ def update_kline(code, name=None, exchange=None):
     返回: (新增天数, 总天数, latest_info)
     """
     ensure_db()
-    conn = sqlite3.connect(get_db_path())
+    conn = get_connection()
     c = conn.cursor()
     
-    # 查找最新日期
-    c.execute('SELECT MAX(date) FROM kline_data WHERE stock_code = ?', (code,))
+    c.execute('SELECT MAX(date) FROM kline_data WHERE stock_code = %s', (code,))
     row = c.fetchone()
     last_date = row[0] if row and row[0] else '2020-01-01'
     
-    # 确定交易所
     if not exchange:
         if code.startswith('6') or code.startswith('9'):
             exchange = 'sh'
@@ -151,7 +142,6 @@ def update_kline(code, name=None, exchange=None):
             exchange = 'sz'
     code_full = exchange + code
     
-    # 从最新日期的下一天开始获取（多取几天确保不遗漏）
     start_parts = last_date.split('-')
     from datetime import datetime, timedelta
     last_dt = datetime(int(start_parts[0]), int(start_parts[1]), int(start_parts[2]))
@@ -163,7 +153,6 @@ def update_kline(code, name=None, exchange=None):
     last_error = None
     first_batch = True
     
-    # 分批获取（每批最多500天，实际约365个交易日）
     batch_start = start_dt
     while batch_start < end_dt:
         batch_end = min(batch_start + timedelta(days=550), end_dt)
@@ -174,15 +163,13 @@ def update_kline(code, name=None, exchange=None):
                 batch_end.strftime('%Y-%m-%d')
             )
             if first_batch:
-                latest_info = latest  # 保留第一批的qt行情（含实时价格/日期）
+                latest_info = latest
                 first_batch = False
             if not rows:
-                # 该批次无数据（可能是上市前的空区间），跳到下一批继续
                 batch_start = batch_end
                 continue
             all_rows.extend(rows)
             latest_info = latest
-            # 用实际返回的最后一条日期作为下一批起点
             last_fetched_dt = datetime.strptime(rows[-1]['date'], '%Y-%m-%d')
             if last_fetched_dt >= end_dt - timedelta(days=1):
                 break
@@ -191,28 +178,29 @@ def update_kline(code, name=None, exchange=None):
             print(f"  获取数据失败: {e}")
             break
     
-    # 写入数据库（INSERT OR REPLACE 处理重复）
     if all_rows:
-        c.executemany(
-            'INSERT OR REPLACE INTO kline_data (stock_code, date, open, high, low, close, volume) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        psycopg2.extras.execute_batch(
+            c,
+            '''INSERT INTO kline_data (stock_code, date, open, high, low, close, volume) 
+               VALUES (%s, %s, %s, %s, %s, %s, %s)
+               ON CONFLICT (stock_code, date) DO UPDATE SET
+               open=EXCLUDED.open, high=EXCLUDED.high, low=EXCLUDED.low, 
+               close=EXCLUDED.close, volume=EXCLUDED.volume''',
             [(code, r['date'], r['open'], r['high'], r['low'], r['close'], r['volume']) for r in all_rows]
         )
         conn.commit()
     
-    # 总天数
-    c.execute('SELECT COUNT(*) FROM kline_data WHERE stock_code = ?', (code,))
+    c.execute('SELECT COUNT(*) FROM kline_data WHERE stock_code = %s', (code,))
     total = c.fetchone()[0]
     
-    # 如果没有获取到最新行情（增量0天），从数据库最新K线获取
     if not latest_info and total > 0:
-        c.execute('SELECT close FROM kline_data WHERE stock_code = ? ORDER BY date DESC LIMIT 1', (code,))
+        c.execute('SELECT close FROM kline_data WHERE stock_code = %s ORDER BY date DESC LIMIT 1', (code,))
         last_close = c.fetchone()
         latest_info = {'price': last_close[0] if last_close else 0, 'pe': 0, 'pb': 0}
     
-    # 保存最后一次成功的PE/PB/价格到stocks表（供增量0天时恢复）
     if latest_info and (latest_info.get('pe', 0) > 0 or latest_info.get('pb', 0) > 0):
         try:
-            c.execute('''UPDATE stocks SET last_pe=?, last_pb=?, last_price=? WHERE code=?''',
+            c.execute('''UPDATE stocks SET last_pe=%s, last_pb=%s, last_price=%s WHERE code=%s''',
                 (latest_info.get('pe', 0), latest_info.get('pb', 0), latest_info.get('price', 0), code))
             conn.commit()
         except:
@@ -226,10 +214,9 @@ def get_kline(code):
     返回: list of dict
     """
     ensure_db()
-    conn = sqlite3.connect(get_db_path())
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
-    c.execute('SELECT date, open, close, high, low, volume FROM kline_data WHERE stock_code = ? ORDER BY date', (code,))
+    conn = get_connection()
+    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    c.execute('SELECT date, open, close, high, low, volume FROM kline_data WHERE stock_code = %s ORDER BY date', (code,))
     rows = [dict(r) for r in c.fetchall()]
     conn.close()
     return rows
@@ -240,21 +227,21 @@ def save_stock_info(code, name, exchange, total_shares, industry, model_type,
                     extra_factors='{}'):
     """保存/更新股票基本信息"""
     ensure_db()
-    conn = sqlite3.connect(get_db_path())
+    conn = get_connection()
     c = conn.cursor()
     c.execute('''INSERT INTO stocks 
         (code, name, exchange, total_shares, industry, model_type,
          pe_min, pe_max, pb_min, pb_max, eps_growth,
          revenue, net_profit, gross_margin, market_cap, subtitle, extra_factors, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
         ON CONFLICT(code) DO UPDATE SET
-         name=excluded.name, exchange=excluded.exchange, total_shares=excluded.total_shares,
-         industry=excluded.industry, model_type=excluded.model_type,
-         pe_min=excluded.pe_min, pe_max=excluded.pe_max, pb_min=excluded.pb_min, pb_max=excluded.pb_max,
-         eps_growth=excluded.eps_growth, revenue=excluded.revenue, net_profit=excluded.net_profit,
-         gross_margin=excluded.gross_margin, market_cap=excluded.market_cap,
-         subtitle=excluded.subtitle, extra_factors=excluded.extra_factors,
-         updated_at=CURRENT_TIMESTAMP''',
+         name=EXCLUDED.name, exchange=EXCLUDED.exchange, total_shares=EXCLUDED.total_shares,
+         industry=EXCLUDED.industry, model_type=EXCLUDED.model_type,
+         pe_min=EXCLUDED.pe_min, pe_max=EXCLUDED.pe_max, pb_min=EXCLUDED.pb_min, pb_max=EXCLUDED.pb_max,
+         eps_growth=EXCLUDED.eps_growth, revenue=EXCLUDED.revenue, net_profit=EXCLUDED.net_profit,
+         gross_margin=EXCLUDED.gross_margin, market_cap=EXCLUDED.market_cap,
+         subtitle=EXCLUDED.subtitle, extra_factors=EXCLUDED.extra_factors,
+         updated_at=NOW()''',
         (code, name, exchange, total_shares, industry, model_type,
          pe_min, pe_max, pb_min, pb_max, eps_growth,
          revenue, net_profit, gross_margin, market_cap, subtitle, extra_factors))
@@ -264,10 +251,9 @@ def save_stock_info(code, name, exchange, total_shares, industry, model_type,
 def get_stock_info(code):
     """读取股票基本信息"""
     ensure_db()
-    conn = sqlite3.connect(get_db_path())
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
-    c.execute('SELECT * FROM stocks WHERE code = ?', (code,))
+    conn = get_connection()
+    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    c.execute('SELECT * FROM stocks WHERE code = %s', (code,))
     row = c.fetchone()
     conn.close()
     return dict(row) if row else None
@@ -275,9 +261,8 @@ def get_stock_info(code):
 def list_stocks():
     """列出所有已存储的股票"""
     ensure_db()
-    conn = sqlite3.connect(get_db_path())
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
+    conn = get_connection()
+    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     c.execute('SELECT code, name, exchange, industry, model_type, updated_at FROM stocks ORDER BY code')
     rows = [dict(r) for r in c.fetchall()]
     conn.close()
@@ -286,20 +271,22 @@ def list_stocks():
 def save_report_meta(code, report_file, params=''):
     """记录报告生成信息"""
     ensure_db()
-    conn = sqlite3.connect(get_db_path())
+    conn = get_connection()
     c = conn.cursor()
-    c.execute('''INSERT OR REPLACE INTO reports_meta (code, report_file, generated_at, params)
-        VALUES (?, ?, CURRENT_TIMESTAMP, ?)''', (code, report_file, params))
+    c.execute('''INSERT INTO reports_meta (code, report_file, generated_at, params)
+        VALUES (%s, %s, NOW(), %s)
+        ON CONFLICT(code) DO UPDATE SET
+        report_file=EXCLUDED.report_file, generated_at=NOW(), params=EXCLUDED.params''',
+        (code, report_file, params))
     conn.commit()
     conn.close()
 
 def get_report_meta(code):
     """读取报告生成信息"""
     ensure_db()
-    conn = sqlite3.connect(get_db_path())
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
-    c.execute('SELECT * FROM reports_meta WHERE code = ?', (code,))
+    conn = get_connection()
+    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    c.execute('SELECT * FROM reports_meta WHERE code = %s', (code,))
     row = c.fetchone()
     conn.close()
     return dict(row) if row else None
@@ -307,7 +294,7 @@ def get_report_meta(code):
 def db_stats():
     """数据库统计信息"""
     ensure_db()
-    conn = sqlite3.connect(get_db_path())
+    conn = get_connection()
     c = conn.cursor()
     c.execute('SELECT COUNT(DISTINCT stock_code) FROM kline_data')
     stock_count = c.fetchone()[0]
@@ -315,7 +302,8 @@ def db_stats():
     total_rows = c.fetchone()[0]
     c.execute('SELECT COUNT(*) FROM valuation_history')
     val_rows = c.fetchone()[0]
-    db_size = os.path.getsize(get_db_path()) / 1024
+    c.execute("SELECT pg_database_size(current_database()) / 1024")
+    db_size = c.fetchone()[0]
     conn.close()
     return {'stocks': stock_count, 'kline_rows': total_rows, 'valuation_rows': val_rows, 'db_size_kb': round(db_size, 1)}
 
@@ -324,17 +312,22 @@ def save_valuation_history(stock_code, results):
     results: list of dict, 每条含 date, close, score, pe_ttm, pb 等字段
     """
     ensure_db()
-    conn = sqlite3.connect(get_db_path())
+    conn = get_connection()
     c = conn.cursor()
-    for r in results:
-        c.execute('''INSERT OR REPLACE INTO valuation_history 
+    psycopg2.extras.execute_batch(c,
+        '''INSERT INTO valuation_history 
             (stock_code, date, score, pe, pb, price, pe_score, pb_score, peg_score, 
              ma_score, volatility_score, volume_score)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-            (stock_code, r['date'], r.get('score', 0),
-             r.get('pe_ttm', 0), r.get('pb', 0), r.get('close', 0),
-             r.get('s_pe', 0), r.get('s_pb', 0), r.get('s_peg', 0),
-             r.get('s_ma', 0), r.get('s_vola', 0), r.get('s_vol', 0)))
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (stock_code, date) DO UPDATE SET
+            score=EXCLUDED.score, pe=EXCLUDED.pe, pb=EXCLUDED.pb, price=EXCLUDED.price,
+            pe_score=EXCLUDED.pe_score, pb_score=EXCLUDED.pb_score, peg_score=EXCLUDED.peg_score,
+            ma_score=EXCLUDED.ma_score, volatility_score=EXCLUDED.volatility_score, 
+            volume_score=EXCLUDED.volume_score''',
+        [(stock_code, r['date'], r.get('score', 0),
+          r.get('pe_ttm', 0), r.get('pb', 0), r.get('close', 0),
+          r.get('s_pe', 0), r.get('s_pb', 0), r.get('s_peg', 0),
+          r.get('s_ma', 0), r.get('s_vola', 0), r.get('s_vol', 0)) for r in results])
     conn.commit()
     conn.close()
 
@@ -343,11 +336,10 @@ def get_valuation_history(stock_code):
     返回: list of dict, 含 date, close, score, pe, pb 等
     """
     ensure_db()
-    conn = sqlite3.connect(get_db_path())
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
+    conn = get_connection()
+    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     c.execute('''SELECT date, score, pe, pb, price FROM valuation_history 
-                 WHERE stock_code = ? ORDER BY date''', (stock_code,))
+                 WHERE stock_code = %s ORDER BY date''', (stock_code,))
     rows = [dict(r) for r in c.fetchall()]
     conn.close()
     return rows
@@ -355,15 +347,14 @@ def get_valuation_history(stock_code):
 def list_valuation_stocks():
     """列出数据库中有估值历史的所有股票"""
     ensure_db()
-    conn = sqlite3.connect(get_db_path())
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
+    conn = get_connection()
+    c = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     c.execute('''SELECT DISTINCT vh.stock_code, s.name, s.industry, s.model_type,
                  COUNT(vh.date) as days, MAX(vh.date) as latest_date,
                  (SELECT score FROM valuation_history WHERE stock_code = vh.stock_code ORDER BY date DESC LIMIT 1) as latest_score
                  FROM valuation_history vh
                  LEFT JOIN stocks s ON vh.stock_code = s.code
-                 GROUP BY vh.stock_code
+                 GROUP BY vh.stock_code, s.name, s.industry, s.model_type
                  ORDER BY vh.stock_code''')
     rows = [dict(r) for r in c.fetchall()]
     conn.close()
@@ -383,8 +374,8 @@ if __name__ == '__main__':
     cmd = sys.argv[1]
     
     if cmd == 'init':
-        path = ensure_db()
-        print(f"数据库已初始化: {path}")
+        ensure_db()
+        print("数据库已初始化")
     
     elif cmd == 'update':
         if len(sys.argv) < 3:
@@ -401,7 +392,6 @@ if __name__ == '__main__':
     elif cmd == 'list':
         stocks = list_stocks()
         for s in stocks:
-            c.execute = None  # suppress
             print(f"  {s['code']} {s['name']} ({s['exchange']}) {s['industry']} [{s['model_type']}]")
         if not stocks:
             print("  (空)")

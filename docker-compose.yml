@@ -1,65 +1,104 @@
 services:
-  backend:
-    build: ./backend
-    ports:
-      - "8001:8000"
+  # ============================================================
+  # 基础设施（开发/生产共用，默认启动）
+  # ============================================================
+  postgres:
+    image: m.daocloud.io/docker.io/library/postgres:16-alpine
     environment:
-      - DATABASE_URL=sqlite:///./data/valuation.db
-      - REDIS_URL=redis://redis:6379
-      - CELERY_BROKER_URL=redis://redis:6379/0
-      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+      - POSTGRES_DB=valuation
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
     volumes:
-      - ./backend/data:/app/data
-      - ./backend/output:/app/output
-    depends_on:
-      - redis
-    restart: unless-stopped
-
-  frontend:
-    build: ./frontend
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/scripts/init_dev_db.sql:/docker-entrypoint-initdb.d/init_dev_db.sql
     ports:
-      - "8080:80"
-    depends_on:
-      - backend
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     restart: unless-stopped
 
   redis:
     image: m.daocloud.io/docker.io/library/redis:7.0-alpine
     volumes:
       - redis_data:/data
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  # ============================================================
+  # 应用服务（仅生产环境，通过 --profile prod 启动）
+  # ============================================================
+  backend:
+    build: ./backend
+    profiles: ["prod"]
+    ports:
+      - "8001:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/valuation
+      - REDIS_URL=redis://redis:6379
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/1
+    volumes:
+      - ./backend/output:/app/output
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    profiles: ["prod"]
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
     restart: unless-stopped
 
   celery-worker:
     build: ./backend
+    profiles: ["prod"]
     command: celery -A app.services.scheduler.celery_app worker --loglevel=info
     environment:
-      - DATABASE_URL=sqlite:///./data/valuation.db
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/valuation
       - REDIS_URL=redis://redis:6379
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
     volumes:
-      - ./backend/data:/app/data
       - ./backend/output:/app/output
     depends_on:
-      - redis
-      - backend
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      backend:
+        condition: service_started
     restart: unless-stopped
 
   celery-beat:
     build: ./backend
+    profiles: ["prod"]
     command: celery -A app.services.scheduler.celery_app beat --loglevel=info
     environment:
-      - DATABASE_URL=sqlite:///./data/valuation.db
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/valuation
       - REDIS_URL=redis://redis:6379
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/1
     volumes:
-      - ./backend/data:/app/data
       - ./backend/output:/app/output
     depends_on:
-      - redis
-      - backend
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      backend:
+        condition: service_started
     restart: unless-stopped
 
 volumes:
   redis_data:
+  postgres_data:

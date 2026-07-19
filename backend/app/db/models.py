@@ -5,6 +5,9 @@ from app.db.session import Base
 class KlineData(Base):
     """K线数据表，存储前复权日K线数据。增量更新，不修改历史记录。"""
     __tablename__ = "kline_data"
+    __table_args__ = (
+        UniqueConstraint("stock_code", "date", name="uq_kline_data_stock_date"),
+    )
     id = Column(Integer, primary_key=True, index=True)
     stock_code = Column(String(10), index=True)
     date = Column(Date, index=True)
