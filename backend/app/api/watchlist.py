@@ -1,4 +1,5 @@
 """自选股API，提供自选股管理和批量估值计算。"""
+import re
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -10,6 +11,28 @@ from app.services.valuation import ValuationService
 from app.schemas.watchlist import WatchlistItem, WatchlistResponse
 
 router = APIRouter()
+
+
+def normalize_stock_code(raw_code: str) -> str:
+    """标准化股票代码，支持多种格式。
+
+    支持: 000001、000001.sz、000001.SZ、sh.000001、SH.000001
+    返回: 纯数字代码，如 000001
+    """
+    code = raw_code.strip().upper()
+    # 格式: sh.000001 / sz.000001
+    m = re.match(r'^(SH|SZ)\.(\d{6})$', code)
+    if m:
+        return m.group(2)
+    # 格式: 000001.sh / 000001.sz
+    m = re.match(r'^(\d{6})\.(SH|SZ)$', code)
+    if m:
+        return m.group(1)
+    # 格式: 纯数字
+    m = re.match(r'^(\d{6})$', code)
+    if m:
+        return m.group(1)
+    return raw_code.strip()
 
 
 def _batch_calculate(db: Session) -> dict:
@@ -87,14 +110,26 @@ def get_watchlist(db: Session = Depends(get_db)):
 
 @router.post("", response_model=WatchlistResponse)
 def add_to_watchlist(item: WatchlistItem, db: Session = Depends(get_db)):
-    """添加股票到自选列表。"""
-    existing = db.query(Watchlist).filter(Watchlist.stock_code == item.stock_code).first()
+    """添加股票到自选列表。代码支持 000001、000001.sz、sh.000001 等格式，名称可不填自动获取。"""
+    stock_code = normalize_stock_code(item.stock_code)
+    stock_name = (item.stock_name or "").strip()
+
+    # 名称未填时自动从行情接口获取
+    if not stock_name:
+        data_service = DataService()
+        kline_data = data_service.get_kline_data(stock_code, db=db)
+        if kline_data:
+            stock_name = kline_data[0].get("name", "")
+        if not stock_name:
+            raise HTTPException(status_code=400, detail=f"无法获取股票 {stock_code} 的信息，请检查代码是否正确")
+
+    existing = db.query(Watchlist).filter(Watchlist.stock_code == stock_code).first()
     if existing:
         raise HTTPException(status_code=400, detail="Stock already in watchlist")
     watchlist_item = Watchlist(
-        stock_code=item.stock_code,
-        stock_name=item.stock_name,
-        industry=item.industry,
+        stock_code=stock_code,
+        stock_name=stock_name,
+        industry=item.industry or "",
         model_type=item.model_type,
         ai_enabled=item.ai_enabled,
     )

@@ -3,10 +3,31 @@
     <div class="header">
       <el-button @click="goBack">返回</el-button>
       <h1>{{ stockInfo.name || '加载中...' }} ({{ stockInfo.code || route.params.code }})</h1>
+      <div class="header-actions">
+        <el-button type="primary" plain @click="$router.push('/')">自选股</el-button>
+      </div>
     </div>
 
     <div v-loading="loading" class="report-content">
+      <!-- 无报告空状态 -->
+      <div v-if="!loading && !valuation" class="empty-state">
+        <el-empty description="该股票暂无估值报告">
+          <template #default>
+            <p class="empty-hint">股票 <strong>{{ stockInfo.name || route.params.code }}</strong> 尚未计算估值报告</p>
+            <p class="empty-hint">请先在首页「自选股」中添加该股票，再通过「批量计算」生成报告</p>
+            <el-button type="primary" @click="goBack">返回首页</el-button>
+          </template>
+        </el-empty>
+      </div>
+
       <div v-if="valuation" class="report-body">
+        <!-- 计算时间 -->
+        <div class="report-meta">
+          <span class="meta-item">
+            <el-icon><Clock /></el-icon>
+            计算时间：{{ valuation.date }}
+          </span>
+        </div>
         <div class="summary-card">
           <div class="summary-item">
             <span class="label">估值分</span>
@@ -148,6 +169,7 @@
 import { ref, onMounted, onUnmounted, nextTick, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
+import { Clock } from '@element-plus/icons-vue'
 import * as echarts from 'echarts'
 import { stockAPI, valuationAPI } from '../api'
 
@@ -246,13 +268,20 @@ const handleResize = () => {
 
 const loadData = async () => {
   loading.value = true
+  valuation.value = null
   const code = route.params.code
   try {
     stockInfo.value = await stockAPI.getInfo(code)
+  } catch (error) {
+    // 股票信息获取失败，保留代码显示
+    stockInfo.value = { code, name: '' }
+  }
+  try {
     valuation.value = await valuationAPI.getReport(code)
     await loadHistory()
   } catch (error) {
-    ElMessage.error('加载数据失败: ' + (error.response?.data?.detail || error.message))
+    // 估值报告不存在时不弹错误，由空状态组件提示
+    console.log('No valuation report found for:', code)
   } finally {
     loading.value = false
   }
@@ -591,9 +620,42 @@ const goBack = () => {
 .header h1 {
   margin: 0;
   color: #333;
+  flex: 1;
+}
+.header-actions {
+  margin-left: auto;
 }
 .report-content {
   min-height: 400px;
+}
+/* 空状态 */
+.empty-state {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 400px;
+}
+.empty-hint {
+  color: #909399;
+  font-size: 14px;
+  margin: 4px 0;
+}
+/* 报告元信息栏 */
+.report-meta {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 16px;
+  margin-bottom: 16px;
+  background: #f0f9ff;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #606266;
+}
+.meta-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 .summary-card {
   display: flex;

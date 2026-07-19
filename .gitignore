@@ -52,7 +52,6 @@ local_reports/
 # IDE config
 .idea/
 .vscode/
-.trae/.qoder
 
 # Legacy SQLite data (migrated to PostgreSQL)
 backend/data/

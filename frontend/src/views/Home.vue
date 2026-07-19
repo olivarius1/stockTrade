@@ -36,7 +36,6 @@
         <el-table :data="watchlist" border v-loading="tableLoading">
           <el-table-column prop="stock_code" label="代码" width="100" />
           <el-table-column prop="stock_name" label="名称" width="120" />
-          <el-table-column prop="industry" label="行业" width="120" />
           <el-table-column prop="model_type" label="模型" width="100" />
           <el-table-column label="AI分析" width="80">
             <template #default="{ row }">
@@ -58,13 +57,10 @@
     <el-dialog title="添加股票到自选" v-model="addDialogVisible" width="500px">
       <el-form :model="newStock" label-width="100px">
         <el-form-item label="股票代码">
-          <el-input v-model="newStock.stock_code" placeholder="如: 600519" />
+          <el-input v-model="newStock.stock_code" placeholder="如: 000001、000001.sz、sh.600519" />
         </el-form-item>
         <el-form-item label="股票名称">
-          <el-input v-model="newStock.stock_name" placeholder="如: 贵州茅台" />
-        </el-form-item>
-        <el-form-item label="行业">
-          <el-input v-model="newStock.industry" placeholder="如: 食品饮料" />
+          <el-input v-model="newStock.stock_name" placeholder="可不填，自动获取" />
         </el-form-item>
         <el-form-item label="估值模型">
           <el-select v-model="newStock.model_type" placeholder="选择模型" style="width: 100%">
@@ -109,7 +105,6 @@ const batchLoading = ref(false)
 const newStock = ref({
   stock_code: '',
   stock_name: '',
-  industry: '',
   model_type: 'tech',
   ai_enabled: false
 })
@@ -145,7 +140,6 @@ const addStock = () => {
   newStock.value = {
     stock_code: '',
     stock_name: '',
-    industry: '',
     model_type: 'tech',
     ai_enabled: false
   }
@@ -153,8 +147,8 @@ const addStock = () => {
 }
 
 const confirmAdd = async () => {
-  if (!newStock.value.stock_code || !newStock.value.stock_name) {
-    ElMessage.warning('请填写股票代码和名称')
+  if (!newStock.value.stock_code) {
+    ElMessage.warning('请填写股票代码')
     return
   }
   try {

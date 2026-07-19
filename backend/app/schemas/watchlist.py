@@ -1,10 +1,11 @@
 from pydantic import BaseModel
 from datetime import datetime
+from typing import Optional
 
 class WatchlistItem(BaseModel):
     stock_code: str
-    stock_name: str
-    industry: str
+    stock_name: Optional[str] = ""
+    industry: Optional[str] = ""
     model_type: str
     ai_enabled: bool = False
 
