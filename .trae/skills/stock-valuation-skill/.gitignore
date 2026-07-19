@@ -1,7 +1,0 @@
-__pycache__/
-*.pyc
-*.json
-!reports/*.json
-.DS_Store
-*.swp
-tmp/
