@@ -13,5 +13,5 @@ trigger: always_on
 处理报告/db文件时,文件可能很大,不要盲目读取,避免过多消耗token
 
 环境:
-项目在windows 环境下开发,本地部署. 
+项目WSL环境下开发,本地部署. 虚拟环境 .venv 
 机器上有wsl, 可以执行`wsl` 进入 ubuntu24.04 环境

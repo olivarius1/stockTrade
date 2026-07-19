@@ -101,6 +101,7 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 
 # 4. 启动前端开发服务器（另一个终端）
 cd frontend
+npm install
 npm run dev
 
 # 或使用后端快捷脚本
