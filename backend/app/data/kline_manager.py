@@ -11,9 +11,9 @@ import sys
 import urllib.request
 
 def get_connection():
-    """从 DATABASE_URL 环境变量获取 PostgreSQL 连接"""
-    db_url = os.environ.get('DATABASE_URL', 'postgresql://postgres:postgres@localhost:5432/valuation')
-    return psycopg2.connect(db_url)
+    """从应用配置获取 PostgreSQL 连接（与 ORM 使用同一数据库）"""
+    from app.core.config import settings
+    return psycopg2.connect(settings.DATABASE_URL)
 
 def ensure_db():
     """确保数据库表存在"""

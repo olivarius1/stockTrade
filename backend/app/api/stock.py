@@ -6,13 +6,77 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, select
 
 from app.db.session import get_db
-from app.db.models import ValuationHistory
+from app.db.models import ValuationHistory, Watchlist
 from app.services.data_service import DataService
 from app.services.valuation import ValuationService
 from app.schemas.stock import StockInfo, StockSearchResponse
-from app.schemas.valuation import ValuationResult, ValuationHistoryItem
+from app.schemas.valuation import ValuationResult, ValuationHistoryItem, SectorInfo, MarketUndervaluedItem
 
 router = APIRouter()
+
+
+@router.get("/sectors", response_model=List[SectorInfo])
+def get_sectors(db: Session = Depends(get_db)):
+    """获取所有板块列表（基于 Watchlist.industry 去重）及各板块股票数。"""
+    results = db.query(
+        Watchlist.industry,
+        func.count(Watchlist.id).label("count")
+    ).filter(
+        Watchlist.industry.isnot(None),
+        Watchlist.industry != ""
+    ).group_by(Watchlist.industry).all()
+    return [SectorInfo(industry=r[0], count=r[1]) for r in results]
+
+
+@router.get("/sectors/{industry}", response_model=List[MarketUndervaluedItem])
+def get_sector_stocks(industry: str, db: Session = Depends(get_db)):
+    """获取指定板块的股票及最新估值摘要。"""
+    latest_date = db.query(func.max(ValuationHistory.date)).scalar()
+
+    # 该板块的自选股
+    items = db.query(Watchlist).filter(Watchlist.industry == industry).all()
+    if not items:
+        return []
+
+    stock_codes = [item.stock_code for item in items]
+
+    # 每只股票最新估值记录
+    latest_subq = db.query(
+        ValuationHistory.stock_code,
+        func.max(ValuationHistory.id).label("max_id")
+    ).filter(
+        ValuationHistory.stock_code.in_(stock_codes)
+    ).group_by(ValuationHistory.stock_code).subquery()
+
+    valuations = db.query(ValuationHistory).filter(
+        ValuationHistory.id.in_(select(latest_subq.c.max_id))
+    ).all()
+    valuation_map = {v.stock_code: v for v in valuations}
+
+    valuation_service = ValuationService()
+    result = []
+    for item in items:
+        val = valuation_map.get(item.stock_code)
+        score = val.score if val else 0
+        percentile = valuation_service.calculate_percentile(item.stock_code, score, db) if val else 0
+        status = valuation_service.get_status(percentile) if val else "未计算"
+
+        result.append(MarketUndervaluedItem(
+            stock_code=item.stock_code,
+            stock_name=item.stock_name,
+            score=score,
+            percentile=percentile,
+            status=status,
+            industry=item.industry or "",
+            model_type=item.model_type or "",
+            price=val.price if val else None,
+            valuation_date=val.date if val else None,
+            is_latest=(val.date == latest_date) if val else False,
+        ))
+
+    # 按估值分降序
+    result.sort(key=lambda x: x.score, reverse=True)
+    return result
 
 
 @router.get("/search", response_model=List[StockSearchResponse])

@@ -18,6 +18,10 @@ celery_app.conf.beat_schedule = {
         'task': 'app.tasks.valuation_tasks.update_kline_and_recalculate',
         'schedule': crontab(hour=3, minute=0),
     },
+    'daily-kline-batch-fetch': {
+        'task': 'app.tasks.valuation_tasks.kline_batch_fetch',
+        'schedule': crontab(hour=16, minute=30),
+    },
 }
 
 celery_app.conf.timezone = 'Asia/Shanghai'

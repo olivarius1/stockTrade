@@ -12,6 +12,16 @@ const routes = [
     component: () => import('../views/Home.vue')
   },
   {
+    path: '/market',
+    name: 'MarketUndervalued',
+    component: () => import('../views/MarketUndervalued.vue')
+  },
+  {
+    path: '/sectors',
+    name: 'SectorView',
+    component: () => import('../views/SectorView.vue')
+  },
+  {
     path: '/valuation/report/:code',
     name: 'ValuationReport',
     component: () => import('../views/ValuationReport.vue')

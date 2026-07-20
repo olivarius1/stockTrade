@@ -43,3 +43,21 @@ class ValuationHistoryItem(BaseModel):
     roe_score: Optional[float]
     dividend_score: Optional[float]
     ai_score: Optional[float]
+
+class MarketUndervaluedItem(BaseModel):
+    """全市场低估股票条目。"""
+    stock_code: str
+    stock_name: str
+    score: float
+    percentile: float
+    status: str
+    industry: Optional[str] = ""
+    model_type: Optional[str] = ""
+    price: Optional[float] = None
+    valuation_date: Optional[date] = None
+    is_latest: bool = True
+
+class SectorInfo(BaseModel):
+    """板块信息。"""
+    industry: str
+    count: int

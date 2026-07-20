@@ -10,12 +10,29 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func, select
 
 from app.db.session import get_db
-from app.db.models import ValuationHistory
+from app.db.models import ValuationHistory, Watchlist
 from app.services.data_service import DataService
 from app.services.valuation import ValuationService
-from app.schemas.valuation import ValuationResult, ValuationHistoryItem, ScoreBands
+from app.schemas.valuation import ValuationResult, ValuationHistoryItem, ScoreBands, MarketUndervaluedItem
 
 router = APIRouter()
+
+
+@router.post("/incremental/{code}")
+def incremental_calculate(
+    code: str,
+    db: Session = Depends(get_db),
+):
+    """增量计算：查看K线范围，补齐缺失的估值历史（早期+近期）。"""
+    # 获取股票的模型配置
+    wl = db.query(Watchlist).filter(Watchlist.stock_code == code).first()
+    model_type = wl.model_type if wl else "tech"
+    ai_enabled = wl.ai_enabled if wl else False
+
+    from app.services.watchlist import WatchlistService
+    service = WatchlistService()
+    result = service.incremental_calculate(db, code, model_type, ai_enabled)
+    return result
 
 
 @router.get("/report/{code}", response_model=ValuationResult)
@@ -135,3 +152,67 @@ def get_valuation_history(
         )
         for h in history
     ]
+
+
+@router.get("/market/undervalued", response_model=List[MarketUndervaluedItem])
+def get_market_undervalued(
+    limit: int = Query(50, ge=1, le=200),
+    industry: str = Query(None),
+    model_type: str = Query(None),
+    db: Session = Depends(get_db),
+):
+    """全市场低估排行，按估值分降序返回 Top N。"""
+    # 全局最新交易日
+    latest_date = db.query(func.max(ValuationHistory.date)).scalar()
+    if not latest_date:
+        return []
+
+    # 每只股票最新估值记录
+    latest_subq = db.query(
+        ValuationHistory.stock_code,
+        func.max(ValuationHistory.id).label("max_id")
+    ).group_by(ValuationHistory.stock_code).subquery()
+
+    # 查询最新估值记录，按分数降序
+    query = db.query(ValuationHistory).filter(
+        ValuationHistory.id.in_(select(latest_subq.c.max_id))
+    ).order_by(ValuationHistory.score.desc())
+
+    valuations = query.limit(limit * 2).all()  # 多取一些以便筛选后仍有足够数据
+
+    # 关联 Watchlist 获取名称/行业/模型
+    stock_codes = [v.stock_code for v in valuations]
+    watchlist_map = {}
+    if stock_codes:
+        wl_items = db.query(Watchlist).filter(Watchlist.stock_code.in_(stock_codes)).all()
+        watchlist_map = {w.stock_code: w for w in wl_items}
+
+    valuation_service = ValuationService()
+    result = []
+    for val in valuations:
+        wl = watchlist_map.get(val.stock_code)
+        # 筛选
+        if industry and (not wl or wl.industry != industry):
+            continue
+        if model_type and (not wl or wl.model_type != model_type):
+            continue
+
+        percentile = valuation_service.calculate_percentile(val.stock_code, val.score, db)
+        status = valuation_service.get_status(percentile)
+
+        result.append(MarketUndervaluedItem(
+            stock_code=val.stock_code,
+            stock_name=wl.stock_name if wl else val.stock_code,
+            score=val.score,
+            percentile=percentile,
+            status=status,
+            industry=wl.industry if wl else "",
+            model_type=wl.model_type if wl else "",
+            price=val.price,
+            valuation_date=val.date,
+            is_latest=(val.date == latest_date),
+        ))
+        if len(result) >= limit:
+            break
+
+    return result

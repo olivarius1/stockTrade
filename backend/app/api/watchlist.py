@@ -1,14 +1,15 @@
-"""自选股API，提供自选股管理和批量估值计算。"""
+"""自选股API，提供自选股管理、批量估值计算和估值摘要查询。"""
 import re
-from typing import List
-from fastapi import APIRouter, Depends, HTTPException
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from app.db.session import get_db
-from app.db.models import Watchlist
+from app.db.models import Watchlist, ValuationHistory
 from app.services.data_service import DataService
 from app.services.valuation import ValuationService
-from app.schemas.watchlist import WatchlistItem, WatchlistResponse
+from app.schemas.watchlist import WatchlistItem, WatchlistResponse, WatchlistSummaryItem
 
 router = APIRouter()
 
@@ -156,6 +157,85 @@ def batch_calculate(db: Session = Depends(get_db)):
     try:
         from app.services.watchlist import WatchlistService
         service = WatchlistService()
-        return service.batch_calculate(db)
+        results = service.batch_calculate(db)
+        return {"results": results}
     except ImportError:
         return _batch_calculate(db)
+
+
+@router.get("/summary", response_model=List[WatchlistSummaryItem])
+def get_watchlist_summary(
+    group_id: Optional[int] = Query(None, description="分组ID，NULL查全部"),
+    db: Session = Depends(get_db),
+):
+    """获取自选股估值摘要，联查最新估值数据。首页核心数据源。"""
+    # 全局最新交易日（避免周末/节假日误判）
+    latest_date = db.query(func.max(ValuationHistory.date)).scalar()
+
+    # 每只股票最新估值记录的 id
+    latest_subq = db.query(
+        ValuationHistory.stock_code,
+        func.max(ValuationHistory.id).label("max_id")
+    ).group_by(ValuationHistory.stock_code).subquery()
+
+    # 查询自选股（可按分组过滤）
+    query = db.query(Watchlist)
+    if group_id is not None:
+        query = query.filter(Watchlist.group_id == group_id)
+    items = query.all()
+
+    # 批量获取最新估值记录
+    stock_codes = [item.stock_code for item in items]
+    valuation_map = {}
+    if stock_codes:
+        valuations = db.query(ValuationHistory).filter(
+            ValuationHistory.id.in_(
+                db.query(latest_subq.c.max_id).filter(
+                    latest_subq.c.stock_code.in_(stock_codes)
+                )
+            )
+        ).all()
+        valuation_map = {v.stock_code: v for v in valuations}
+
+    valuation_service = ValuationService()
+    result = []
+    for item in items:
+        val = valuation_map.get(item.stock_code)
+        score = val.score if val else None
+        percentile = None
+        status = None
+        valuation_date = val.date if val else None
+
+        if val and score is not None:
+            percentile = valuation_service.calculate_percentile(item.stock_code, score, db)
+            status = valuation_service.get_status(percentile)
+
+        result.append(WatchlistSummaryItem(
+            stock_code=item.stock_code,
+            stock_name=item.stock_name,
+            model_type=item.model_type,
+            industry=item.industry or "",
+            group_id=item.group_id,
+            score=score,
+            percentile=percentile,
+            status=status,
+            valuation_date=valuation_date,
+            is_latest=(valuation_date == latest_date) if valuation_date else False,
+        ))
+
+    return result
+
+
+@router.put("/{code}/group")
+def move_to_group(
+    code: str,
+    group_id: Optional[int] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """移动股票到指定分组，group_id=null 回归默认自选。"""
+    item = db.query(Watchlist).filter(Watchlist.stock_code == code).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Stock not found in watchlist")
+    item.group_id = group_id
+    db.commit()
+    return {"message": "Moved", "stock_code": code, "group_id": group_id}

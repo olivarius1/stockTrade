@@ -61,6 +61,14 @@ class FinancialData(Base):
     dividend_rate = Column(Float)
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
 
+class StockGroup(Base):
+    """股票分组表，支持用户自定义分组管理。"""
+    __tablename__ = "stock_group"
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(50), unique=True)
+    sort_order = Column(Integer, default=0)
+    created_at = Column(DateTime, default=func.now())
+
 class Watchlist(Base):
     """自选股表，记录用户关注的股票及其估值模型配置。"""
     __tablename__ = "watchlist"
@@ -70,6 +78,7 @@ class Watchlist(Base):
     industry = Column(String(50))
     model_type = Column(String(20))
     ai_enabled = Column(Boolean, default=False)
+    group_id = Column(Integer, nullable=True)  # 关联 StockGroup，NULL=默认"自选"
     created_at = Column(DateTime, default=func.now())
     updated_at = Column(DateTime, default=func.now(), onupdate=func.now())
 
@@ -103,3 +112,16 @@ class User(Base):
     username = Column(String(50), unique=True, index=True)
     hashed_password = Column(String(255))
     created_at = Column(DateTime, default=func.now())
+
+class TaskProgress(Base):
+    """批量任务执行记录表，持久化每次任务的执行结果。"""
+    __tablename__ = "task_progress"
+    id = Column(Integer, primary_key=True, index=True)
+    task_type = Column(String(50), index=True)  # 任务类型: kline_batch_fetch
+    status = Column(String(20), default="running")  # running / completed / failed
+    total = Column(Integer, default=0)
+    completed = Column(Integer, default=0)
+    failed = Column(Integer, default=0)
+    started_at = Column(DateTime, default=func.now())
+    finished_at = Column(DateTime, nullable=True)
+    error_detail = Column(JSON, nullable=True)  # 失败详情

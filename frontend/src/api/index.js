@@ -48,6 +48,12 @@ export const stockAPI = {
   },
   getInfo(code) {
     return api.get(`/stock/${code}`)
+  },
+  getSectors() {
+    return api.get('/stock/sectors')
+  },
+  getSectorStocks(industry) {
+    return api.get(`/stock/sectors/${industry}`)
   }
 }
 
@@ -61,6 +67,12 @@ export const valuationAPI = {
   },
   getHistory(code, startDate, endDate) {
     return api.get(`/valuation/history/${code}`, { params: { start_date: startDate, end_date: endDate } })
+  },
+  getMarketUndervalued(params) {
+    return api.get('/valuation/market/undervalued', { params })
+  },
+  incremental(code) {
+    return api.post(`/valuation/incremental/${code}`)
   }
 }
 
@@ -68,6 +80,9 @@ export const valuationAPI = {
 export const watchlistAPI = {
   getList() {
     return api.get('/watchlist')
+  },
+  getSummary(groupId) {
+    return api.get('/watchlist/summary', { params: { group_id: groupId } })
   },
   add(item) {
     return api.post('/watchlist', item)
@@ -77,6 +92,9 @@ export const watchlistAPI = {
   },
   batchCalculate() {
     return api.post('/watchlist/batch')
+  },
+  moveToGroup(code, groupId) {
+    return api.put(`/watchlist/${code}/group`, null, { params: { group_id: groupId } })
   }
 }
 
@@ -90,6 +108,15 @@ export const schedulerAPI = {
   },
   run() {
     return api.post('/scheduler/run')
+  },
+  triggerKlineFetch() {
+    return api.post('/scheduler/kline-fetch')
+  },
+  getKlineFetchProgress() {
+    return api.get('/scheduler/kline-fetch/progress')
+  },
+  getKlineFetchHistory() {
+    return api.get('/scheduler/kline-fetch/history')
   }
 }
 
@@ -106,6 +133,22 @@ export const modelsAPI = {
   },
   getFactor(code) {
     return api.get(`/models/factors/${code}`)
+  }
+}
+
+/** 分组管理 API */
+export const groupAPI = {
+  getList() {
+    return api.get('/groups')
+  },
+  create(data) {
+    return api.post('/groups', data)
+  },
+  rename(id, data) {
+    return api.put(`/groups/${id}`, data)
+  },
+  remove(id) {
+    return api.delete(`/groups/${id}`)
   }
 }
 

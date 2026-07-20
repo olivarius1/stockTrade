@@ -27,6 +27,9 @@
             <el-icon><Clock /></el-icon>
             计算时间：{{ valuation.date }}
           </span>
+          <el-button size="small" :loading="incrementalLoading" @click="runIncremental">
+            增量计算
+          </el-button>
         </div>
         <div class="summary-card">
           <div class="summary-item">
@@ -71,7 +74,18 @@
         </div>
 
         <div class="chart-section">
-          <h3>估值曲线 <span class="chart-hint">（点击曲线上数据点可选为对比日期）</span></h3>
+          <div class="chart-header">
+            <h3>估值曲线 <span class="chart-hint">（点击曲线上数据点可选为对比日期）</span></h3>
+            <div class="zoom-btns">
+              <el-button-group size="small">
+                <el-button :type="zoomRange === '3m' ? 'primary' : ''" @click="setZoom('3m')">3月</el-button>
+                <el-button :type="zoomRange === '6m' ? 'primary' : ''" @click="setZoom('6m')">半年</el-button>
+                <el-button :type="zoomRange === '1y' ? 'primary' : ''" @click="setZoom('1y')">1年</el-button>
+                <el-button :type="zoomRange === '2y' ? 'primary' : ''" @click="setZoom('2y')">2年</el-button>
+                <el-button :type="zoomRange === 'all' ? 'primary' : ''" @click="setZoom('all')">全部</el-button>
+              </el-button-group>
+            </div>
+          </div>
           <div ref="chartRef" style="height: 400px"></div>
         </div>
 
@@ -180,13 +194,16 @@ const valuation = ref(null)
 const chartRef = ref(null)
 const factorList = ref([])
 const loading = ref(true)
+const incrementalLoading = ref(false)
 const historyData = ref([])
 const selectedDate = ref(null)
 const selectedFactors = ref({})
 // 手动输入日期相关状态
 const showDateInput = ref(false)
 const dateInput = ref('')
+const zoomRange = ref('1y')
 let chartInstance = null
+let chartDatesLen = 0
 
 const factorNames = {
   pe_score: 'PE评分',
@@ -299,6 +316,35 @@ const loadHistory = async () => {
   }
 }
 
+const runIncremental = async () => {
+  incrementalLoading.value = true
+  try {
+    const result = await valuationAPI.incremental(route.params.code)
+    if (result.added > 0) {
+      ElMessage.success(`增量计算完成，新增 ${result.added} 天数据`)
+      await loadHistory()
+    } else {
+      ElMessage.info(result.message || '无需补齐，数据已完整')
+    }
+  } catch (error) {
+    ElMessage.error('增量计算失败')
+  } finally {
+    incrementalLoading.value = false
+  }
+}
+
+/** 快捷切换图表时间范围 */
+const zoomDays = { '3m': 63, '6m': 125, '1y': 250, '2y': 500, 'all': 0 }
+const setZoom = (range) => {
+  zoomRange.value = range
+  if (!chartInstance) return
+  const days = zoomDays[range]
+  const start = days && chartDatesLen > days
+    ? Math.round((chartDatesLen - days) / chartDatesLen * 100)
+    : 0
+  chartInstance.dispatchAction({ type: 'dataZoom', start, end: 100 })
+}
+
 const initFactorList = () => {
   const latest = latestFactors.value
   // valuation.factors 是后端返回的参与计算的因子 code 集合
@@ -342,6 +388,7 @@ const renderChart = (history) => {
   const dates = history.map(h => h.date)
   const scores = history.map(h => h.score)
   const prices = history.map(h => h.price)
+  chartDatesLen = dates.length
 
   updateChartOption(history, dates, scores, prices)
 
@@ -439,7 +486,17 @@ const updateChartOption = (history, dates, scores, prices) => {
       }
     },
     legend: { data: ['估值分', '价格'] },
-    grid: { left: '3%', right: '4%', bottom: '3%', containLabel: true },
+    grid: { left: '3%', right: '4%', bottom: '12%', containLabel: true },
+    dataZoom: [
+      {
+        type: 'slider',
+        start: dates.length > 250 ? Math.round((dates.length - 250) / dates.length * 100) : 0,
+        end: 100,
+        bottom: 10,
+        height: 20,
+      },
+      { type: 'inside' }
+    ],
     xAxis: { type: 'category', boundaryGap: false, data: dates },
     yAxis: [
       { type: 'value', name: '估值分', min: 0, max: 100 },
@@ -726,6 +783,17 @@ const goBack = () => {
   margin-top: 0;
   margin-bottom: 15px;
   color: #333;
+}
+.chart-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.chart-header h3 {
+  margin-bottom: 0;
+}
+.zoom-btns {
+  flex-shrink: 0;
 }
 .chart-hint {
   font-size: 13px;

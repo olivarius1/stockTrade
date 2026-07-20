@@ -6,6 +6,7 @@ from typing import Dict, List, Optional
 from app.db.models import Watchlist, ValuationHistory, KlineData
 from app.services.valuation import ValuationService
 from app.services.data_service import DataService
+from app.data.kline_manager import update_kline
 
 
 class WatchlistService:
@@ -299,11 +300,142 @@ class WatchlistService:
             "to_date": str(to_date),
         }
 
+    def incremental_calculate(self, db, stock_code: str, model_type: str,
+                              ai_enabled: bool = False) -> Dict:
+        """增量计算：查看K线范围，补齐缺失的估值历史。
+
+        逻辑：
+        1. 查看最早K线日期，如果估值历史缺少早期数据，向前补齐
+        2. 查看最新K线日期，如果估值历史缺少近期数据，向后补齐
+
+        Args:
+            db: 数据库会话。
+            stock_code: 股票代码。
+            model_type: 估值模型代码。
+            ai_enabled: 是否启用AI因子。
+
+        Returns:
+            包含 added(新增条数)、total_kline、total_valuation 的字典。
+        """
+        # 先从API增量拉取K线数据（确保本地K线是最新的）
+        try:
+            update_kline(stock_code)
+        except Exception:
+            pass  # 网络失败时仍尝试用已有数据
+
+        # 获取K线日期范围
+        kline_rows = db.query(KlineData).filter(
+            KlineData.stock_code == stock_code
+        ).order_by(KlineData.date).all()
+
+        if not kline_rows:
+            return {"added": 0, "total_kline": 0, "total_valuation": 0, "message": "无K线数据（API拉取失败）"}
+
+        # 已有估值历史的日期集合
+        existing_dates = set(
+            r[0] for r in db.query(ValuationHistory.date).filter(
+                ValuationHistory.stock_code == stock_code
+            ).all()
+        )
+
+        # 找出所有缺少估值记录的K线日期
+        missing_rows = [r for r in kline_rows if r.date not in existing_dates]
+
+        if not missing_rows:
+            return {
+                "added": 0,
+                "total_kline": len(kline_rows),
+                "total_valuation": len(existing_dates),
+                "message": "无需补齐",
+            }
+
+        # 财务数据（用于估算历史PE/PB）
+        financial = self.data_service.get_financial_data(stock_code, db=db)
+        eps = financial.get("eps", 0) or 1e-6
+        roe = financial.get("roe", 0) or 0
+
+        closes = [r.close for r in kline_rows]
+        volumes = [r.volume for r in kline_rows]
+        date_to_idx = {r.date: i for i, r in enumerate(kline_rows)}
+
+        added = 0
+        for row in missing_rows:
+            i = date_to_idx[row.date]
+            price = row.close
+            pe = price / eps if eps > 0 else 0
+            pb = pe * roe if roe > 0 else 0
+
+            hist_closes = closes[:i + 1]
+            hist_volumes = volumes[:i + 1]
+
+            ma20 = self.data_service.calculate_ma(stock_code, hist_closes, period=20)
+            ma60 = self.data_service.calculate_ma(stock_code, hist_closes, period=60)
+            volatility = self.data_service.calculate_volatility(stock_code, hist_closes)
+
+            avg_volume = sum(hist_volumes[-60:]) / min(len(hist_volumes), 60) if hist_volumes else 1
+            volume_ratio = row.volume / avg_volume if avg_volume else 1
+
+            data = {
+                "price": price,
+                "pe": pe,
+                "pb": pb,
+                "volume": row.volume,
+                "amount": 0,
+                "ma20": ma20,
+                "ma60": ma60,
+                "volatility": volatility,
+                "volume_ratio": volume_ratio,
+                "eps": financial.get("eps", 0),
+                "revenue": financial.get("revenue", 0),
+                "net_profit": financial.get("net_profit", 0),
+                "roe": financial.get("roe", 0),
+                "gross_margin": financial.get("gross_margin", 0),
+                "dividend_rate": financial.get("dividend_rate", 0),
+            }
+
+            try:
+                result = self.valuation_service.calculate(
+                    stock_code, model_type, data, ai_enabled=ai_enabled
+                )
+                factors = result.get("factors", {})
+                score = result.get("score", 0)
+
+                history = ValuationHistory(
+                    stock_code=stock_code,
+                    date=row.date,
+                    score=score,
+                    pe_score=factors.get("pe"),
+                    pb_score=factors.get("pb"),
+                    peg_score=factors.get("peg"),
+                    ma_score=factors.get("ma_deviation"),
+                    volatility_score=factors.get("volatility"),
+                    volume_score=factors.get("volume"),
+                    roe_score=factors.get("roe"),
+                    dividend_score=factors.get("dividend"),
+                    ai_score=factors.get("ai_analysis"),
+                    pe=pe,
+                    pb=pb,
+                    price=price,
+                )
+                db.add(history)
+                added += 1
+            except Exception:
+                continue
+
+        db.commit()
+        return {
+            "added": added,
+            "total_kline": len(kline_rows),
+            "total_valuation": len(existing_dates) + added,
+        }
+
     def batch_calculate(self, db) -> List[Dict]:
         """批量计算自选股列表中所有股票的估值评分。
 
         为什么每次都写 DB：估值评分依赖历史趋势分析，DB 持久化支持
         后续回测与百分位计算，缺失历史数据会导致 percentile 失真。
+
+        对历史数据不足的股票，自动从 K 线回溯填充估值历史，确保报告页曲线有数据。
 
         Args:
             db: 数据库会话。
@@ -319,6 +451,20 @@ class WatchlistService:
             stock_code = item.stock_code
             stock_name = item.stock_name
             try:
+                # 先从API拉取K线数据到本地数据库
+                try:
+                    update_kline(stock_code)
+                    db.expire_all()  # psycopg2写入后刷新ORM缓存
+                except Exception:
+                    pass  # 网络失败时仍尝试用已有数据
+
+                # 检查历史数据是否充足，不足则从 K 线回溯填充
+                history_count = db.query(ValuationHistory).filter(
+                    ValuationHistory.stock_code == stock_code
+                ).count()
+                if history_count < 30:
+                    self.backfill_valuation_history(db, stock_code, item.model_type, item.ai_enabled)
+
                 kline_data = self.data_service.get_kline_data(stock_code, db=db)
                 if not kline_data:
                     results.append({

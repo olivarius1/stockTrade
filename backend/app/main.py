@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api import auth_router, stock_router, valuation_router, watchlist_router, scheduler_router, models_router
+from app.api import auth_router, stock_router, valuation_router, watchlist_router, scheduler_router, models_router, group_router
 
 app = FastAPI(title="Stock Valuation System", version="1.5.0")
 
@@ -18,6 +18,7 @@ app.include_router(valuation_router, prefix="/api/valuation", tags=["valuation"]
 app.include_router(watchlist_router, prefix="/api/watchlist", tags=["watchlist"])
 app.include_router(scheduler_router, prefix="/api/scheduler", tags=["scheduler"])
 app.include_router(models_router, prefix="/api/models", tags=["models"])
+app.include_router(group_router, prefix="/api/groups", tags=["groups"])
 
 @app.get("/")
 async def root():
